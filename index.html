@@ -203,7 +203,7 @@ import { prepararCampana, ErrorPreparacion } from './lib/hub/nucleo.js';
 import { hoyArgentina } from './lib/input/validar.js';
 import { PERFILES } from './lib/tools/perfiles.js';
 
-const VERSION_APP = '2026-10-19.3';
+const VERSION_APP = '2026-10-19.4';
 const SB_URL  = 'https://ojzcxwhoinmljospgmfp.supabase.co';
 const SB_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qemN4d2hvaW5tbGpvc3BnbWZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5MDY5MTYsImV4cCI6MjA5MzQ4MjkxNn0.jmvVP3weuclrBpQJb57BwmHD77Ofy4CDe43cnmiSFCk';
 const BUCKET = 'nws-piezas';
@@ -453,7 +453,7 @@ function modalNueva(editables){
     const marca_id = +$('nMarca').value, nombre = $('nNombre').value.trim();
     if (!nombre) return toast('Poné un nombre', true);
     try {
-      const n = await api.crearNews({marca_id, nombre, creado_por: me.nombre || me.email, input:{segmento:'todos', emailsTest: me.email ? [me.email] : []}});
+      const n = await api.crearNews({marca_id, nombre, creado_por: me.nombre || me.email, input:{}});
       cerrarModal(); D.news.unshift(n); location.hash = '#news/' + n.id;
     } catch (e) { toast(e.message, true); }
   };
@@ -483,10 +483,12 @@ const editable = () => puedeEditar(cur.marca_id) && !['cargada', 'cancelada'].in
 /** Input estándar a partir de la fila (la librería espera esta forma). */
 function inputDe(n){
   const i = n.input || {};
-  const base = {cliente:String(n.marca_id), nombre:n.nombre, asunto:i.asunto || '', preheader:i.preheader || '', remitente:i.remitente, responderA:i.responderA || undefined,
-    segmento:i.segmento || '', envio:{fecha:n.fecha_envio || '', hora:n.hora_envio || ''}, emailsTest:i.emailsTest || [], links:i.links || [], utm:i.utm, textoPie:i.textoPie || undefined};
+  const base = {cliente:String(n.marca_id), nombre:n.nombre, asunto:i.asunto || '', preheader:i.preheader || '',
+    segmento:(i.segmento || '').trim(), links:i.links || [], textoPie:i.textoPie || undefined};
+  if (n.fecha_envio || n.hora_envio) base.envio = {fecha:n.fecha_envio || '', hora:n.hora_envio || ''};
   if (n.contenido === 'html') base.html = 'pieza.html';
-  else base.piezas = (n.piezas || []).map(p => ({imagen:p.archivo, alt:p.alt || '', link:p.link || undefined}));
+  // Sin alt propio, cada foto usa el asunto (lo que se lee si el mail bloquea imágenes).
+  else base.piezas = (n.piezas || []).map(p => ({imagen:p.archivo, alt:p.alt || i.asunto || n.nombre || '', link:p.link || undefined}));
   return base;
 }
 
@@ -498,7 +500,7 @@ function recalcular(){
   clearTimeout(timerCalc);
   const cliente = clienteDe(cur.marca_id);
   prep = null; errPrep = null;
-  if (!cliente) errPrep = [{severidad:'error', codigo:'cliente', mensaje:`${nombreMarca(cur.marca_id)} no está configurado: falta la herramienta, remitentes y segmentos (Clientes).`}];
+  if (!cliente) errPrep = [{severidad:'error', codigo:'cliente', mensaje:`${nombreMarca(cur.marca_id)} no está configurado: en Clientes elegí la herramienta y la cuenta.`}];
   else {
     const input = inputDe(cur);
     // En la demo las imágenes son blob: del navegador; se valida como si estuvieran en un hosting público.
@@ -522,8 +524,8 @@ function campoInput(id, etiqueta, valor, extra = ''){
 
 function pintarEditor(){
   const n = cur, i = n.input || {}, cliente = clienteDe(n.marca_id), cfg = D.configs[n.marca_id];
-  const rems = cliente?.remitentes || [], segs = Object.entries(cliente?.segmentos || {});
   const dis = editable() ? '' : 'disabled';
+  const segsUsados = segmentosDeMarca(n.marca_id);
   $('vista').innerHTML = `
     <div class="head"><a href="#news" class="bt sm" style="text-decoration:none;color:inherit">← News</a><h1>${esc(n.nombre || 'Sin nombre')}</h1><span class="muted">${esc(nombreMarca(n.marca_id))}${cfg ? ' · ' + HERR[cfg.herramienta] + ' · ' + esc(cfg.cuenta) : ''}</span></div>
     <div class="editor">
@@ -531,17 +533,14 @@ function pintarEditor(){
         <section class="card"><h2>Datos de la campaña</h2>
           ${campoInput('fNombre', 'Nombre interno', n.nombre)}
           ${campoInput('fAsunto', 'Asunto', i.asunto || '')}
-          ${campoInput('fPre', 'Preheader', i.preheader || '')}
+          ${campoInput('fPre', 'Preheader (el texto que se ve al lado del asunto)', i.preheader || '')}
+          <label class="lb" for="fSeg"><span>Segmento</span><span class="cnt">nombre o ID, como figura en ${esc(cfg ? HERR[cfg.herramienta] : 'la herramienta')}</span></label>
+          <input class="inp" id="fSeg" list="fSegLista" value="${esc(i.segmento || '')}" placeholder="Ej: Todos los usuarios, Compradores 2026 o 168395" ${dis}>
+          <datalist id="fSegLista">${segsUsados.map(sg => `<option value="${esc(sg)}"></option>`).join('')}</datalist>
           <div class="row2">
-            <div><label class="lb" for="fRem">Remitente</label><select class="inp" id="fRem" ${dis}>${rems.map((r, k) => `<option value="${k}" ${i.remitente?.email === r.email ? 'selected' : ''}>${esc(r.nombre)} &lt;${esc(r.email)}&gt;</option>`).join('') || '<option>Configurá remitentes en Clientes</option>'}</select></div>
-            <div><label class="lb" for="fSeg">Segmento</label><select class="inp" id="fSeg" ${dis}>${segs.map(([a, s]) => `<option value="${esc(a)}" ${i.segmento === a ? 'selected' : ''}>${esc(s.nombre)} (${esc(s.id)})</option>`).join('') || '<option value="">Configurá segmentos en Clientes</option>'}</select></div>
+            <div><label class="lb" for="fFecha"><span>Fecha de envío</span><span class="cnt">opcional</span></label><input class="inp" type="date" id="fFecha" value="${esc(n.fecha_envio || '')}" ${dis}></div>
+            <div><label class="lb" for="fHora"><span>Hora</span><span class="cnt">opcional</span></label><input class="inp" type="time" id="fHora" value="${esc(n.hora_envio || '')}" ${dis}></div>
           </div>
-          <div class="row2">
-            <div><label class="lb" for="fFecha">Fecha de envío</label><input class="inp" type="date" id="fFecha" value="${esc(n.fecha_envio || '')}" ${dis}></div>
-            <div><label class="lb" for="fHora">Hora (Argentina)</label><input class="inp" type="time" id="fHora" value="${esc(n.hora_envio || '')}" ${dis}></div>
-          </div>
-          ${campoInput('fTest', 'Emails de test (separados por coma)', (i.emailsTest || []).join(', '))}
-          ${campoInput('fReply', 'Responder a (opcional)', i.responderA || '')}
         </section>
 
         <section class="card"><h2>Contenido</h2>
@@ -569,16 +568,12 @@ function pintarEditor(){
   $('fNombre').oninput = cambio(() => cur.nombre = $('fNombre').value);
   $('fAsunto').oninput = cambio(() => setI('asunto', $('fAsunto').value));
   $('fPre').oninput = cambio(() => setI('preheader', $('fPre').value));
-  $('fRem').onchange = cambio(() => setI('remitente', rems[+$('fRem').value]));
-  $('fSeg').onchange = cambio(() => setI('segmento', $('fSeg').value));
+  $('fSeg').oninput = cambio(() => setI('segmento', $('fSeg').value));
+  $('fSeg').onchange = () => recordarSegmento(cur.marca_id, $('fSeg').value);
   $('fFecha').onchange = cambio(() => cur.fecha_envio = $('fFecha').value);
   $('fHora').onchange = cambio(() => cur.hora_envio = $('fHora').value);
-  $('fTest').oninput = cambio(() => setI('emailsTest', $('fTest').value.split(/[,;\s]+/).filter(Boolean)));
-  $('fReply').oninput = cambio(() => setI('responderA', $('fReply').value.trim()));
   $('fPie').oninput = cambio(() => setI('textoPie', $('fPie').value));
   $('fHtml').oninput = cambio(() => { cur.html = $('fHtml').value; pintarPlaceholders(); });
-  if (!i.remitente && rems[0]) setI('remitente', rems[0]);
-  if (!i.segmento && segs[0]) setI('segmento', segs[0][0]);
   document.querySelectorAll('[data-cont]').forEach(b => b.onclick = () => { cur.contenido = b.dataset.cont; pintarEditor(); recalcular(); programarGuardado(); });
   if ($('fHtmlFile')) $('fHtmlFile').onchange = async e => { const f = e.target.files[0]; if (!f) return; cur.html = await f.text(); $('fHtml').value = cur.html; pintarPlaceholders(); recalcular(); programarGuardado(); };
   if ($('fDrive')) $('fDrive').onclick = modalDrive;
@@ -589,6 +584,17 @@ function pintarEditor(){
     d.ondragleave = () => d.classList.remove('on');
     d.ondrop = e => { e.preventDefault(); d.classList.remove('on'); subirPiezas([...e.dataTransfer.files].filter(f => /image\/(png|jpe?g|gif)/.test(f.type))); };
   }
+}
+
+/** Segmentos ya usados con esta marca (en este navegador) para sugerirlos. */
+function segmentosDeMarca(marcaId){
+  const cfg = D.configs[marcaId];
+  const delCliente = Object.values(cfg?.segmentos || {}).map(sg => sg.nombre || sg.id);
+  return [...new Set([...(lsGet('nws_segs_' + marcaId) || []), ...delCliente, 'Todos los usuarios'])].filter(Boolean).slice(0, 30);
+}
+function recordarSegmento(marcaId, valor){
+  const v = (valor || '').trim(); if (!v) return;
+  lsSet('nws_segs_' + marcaId, [v, ...(lsGet('nws_segs_' + marcaId) || []).filter(x => x !== v)].slice(0, 20));
 }
 
 function contadores(){
@@ -618,7 +624,7 @@ function pintarPiezas(){
     const m = prep?.piezas?.[k]?.medidas;
     return `<div class="pz"><img src="${esc(p.url)}" alt="">
       <div><div class="meta"><strong>${k + 1}.</strong> ${esc(p.archivo)} · <span id="pzMed${k}">${m ? m.ancho + '×' + m.alto + 'px' : '…'}</span> · ${Math.round((p.bytes || 0) / 1024)} KB</div>
-        <input class="inp" data-alt="${k}" placeholder="Texto alternativo (alt)" value="${esc(p.alt)}" ${dis}>
+        <input class="inp" data-alt="${k}" placeholder="Texto alternativo (opcional: si no, va el asunto)" value="${esc(p.alt)}" ${dis}>
         <input class="inp" data-link="${k}" placeholder="Link de destino (https://…), vacío = sin link" value="${esc(p.link)}" ${dis}></div>
       ${editable() ? `<div class="pz-acc"><button data-sub="${k}" title="Subir" ${k ? '' : 'disabled'}>↑</button><button data-baj="${k}" title="Bajar" ${k < ps.length - 1 ? '' : 'disabled'}>↓</button><button data-del="${k}" title="Quitar">✕</button></div>` : '<span></span>'}
     </div>`;
@@ -709,7 +715,7 @@ function pintarLado(){
       <div class="previa-marco" style="margin-top:12px"><iframe id="previa" title="Vista previa del mail" sandbox="allow-popups" style="width:${vistaAncho}px"></iframe></div>
     </section>
     ${prep ? `<section class="card"><h2>Datos para pegar en ${esc(herr)}</h2>
-      ${[['Nombre', prep.input.nombre], ['Asunto', prep.input.asunto], ['Preheader', prep.input.preheader], ['Remitente', prep.remitente?.nombre], ['Email remitente', prep.remitente?.email], ['Segmento', prep.segmento ? `${prep.segmento.nombre} (${prep.segmento.id})` : ''], ['Envío', `${fechaCorta(prep.input.envio.fecha)} ${prep.input.envio.hora} (Argentina)`], ['Emails de test', prep.input.emailsTest.join(', ')]]
+      ${[['Nombre', prep.input.nombre], ['Asunto', prep.input.asunto], ['Preheader', prep.input.preheader], ['Segmento', prep.segmento?.nombre || ''], ...(prep.input.envio?.fecha ? [['Envío', `${fechaCorta(prep.input.envio.fecha)} ${prep.input.envio.hora || ''}`]] : [])]
         .map(([k, v], j) => `<div class="campo"><span class="et">${k}</span><span class="val" id="cp${j}">${esc(v || '—')}</span><button class="bt sm" data-cp="cp${j}">Copiar</button></div>`).join('')}
       <div class="campo"><span class="et">HTML</span><span class="val">${(prep.validacion.stats.bytes / 1024).toFixed(1)} KB · ${prep.validacion.stats.imagenes} imágenes · ${prep.validacion.stats.links} links</span><span style="display:flex;gap:6px"><button class="bt sm" id="cpHtml">Copiar HTML</button><button class="bt sm" id="dlHtml">Descargar</button></span></div>
       <p class="nota">Pasos: ${prep.perfil.pasosManuales.map(esc).join(' → ')}</p>
@@ -848,8 +854,8 @@ async function cargarEnWoowup(btn){
     if (!(await guardar())) return;
     const news = {
       cuenta: cfg.cuenta, nombre: cur.nombre, asunto: prep.input.asunto, preheader: prep.input.preheader,
-      segmentoId: prep.segmento?.id, segmentoNombre: prep.segmento?.nombre,
-      fecha: fechaCorta(prep.input.envio.fecha), hora: prep.input.envio.hora, html: prep.htmlFinal,
+      segmentoId: /^\d+$/.test(prep.segmento?.id || '') ? prep.segmento.id : '', segmentoNombre: prep.segmento?.nombre || '',
+      fecha: prep.input.envio?.fecha ? fechaCorta(prep.input.envio.fecha) : 'la que corresponda', hora: prep.input.envio?.hora || '', html: prep.htmlFinal,
     };
     const id = Math.random().toString(36).slice(2);
     const r = await new Promise(res => {
@@ -900,7 +906,7 @@ function modalAprobar(){
     <p class="muted">Aprobás esta versión exacta. Si después cambia el asunto, una pieza, un link o el segmento, la aprobación se cae sola.</p>
     <div class="campo"><span class="et">Asunto</span><span class="val">${esc(prep.input.asunto)}</span><span></span></div>
     <div class="campo"><span class="et">Segmento</span><span class="val">${esc(prep.segmento?.nombre || '')}</span><span></span></div>
-    <div class="campo"><span class="et">Envío</span><span class="val">${fechaCorta(prep.input.envio.fecha)} ${esc(prep.input.envio.hora)}</span><span></span></div>
+    ${prep.input.envio?.fecha ? `<div class="campo"><span class="et">Envío</span><span class="val">${fechaCorta(prep.input.envio.fecha)} ${esc(prep.input.envio.hora || '')}</span><span></span></div>` : ''}
     <div class="campo"><span class="et">Huella</span><span class="val mono">${esc(prep.huella)}</span><span></span></div>
     <label style="display:flex;gap:8px;margin-top:14px;font-weight:600"><input type="checkbox" id="okTest"> Revisé el mail de test y está bien</label>
     <div class="ft"><button class="bt" data-cerrar>Cancelar</button><button class="btn-pri" id="okAprobar" disabled>Aprobar</button></div>`,
@@ -922,73 +928,52 @@ function pintarRegistro(){
 }
 
 // ══ CLIENTES (admin) ════════════════════════════════════════════════════════
+// Por marca alcanza con la herramienta y la cuenta: remitente, UTM y demás los pone la herramienta.
 function vistaClientes(marcaSel){
   const marcas = D.marcas.filter(m => m.activa !== false);
   const sel = marcaSel || marcas[0]?.id;
-  $('vista').innerHTML = `<div class="head"><h1>Clientes</h1><span class="muted">Herramienta, cuenta, remitentes y segmentos de cada marca</span></div>
-    <div class="lista-cfg"><div class="card marcas">${marcas.map(m => `<a class="marca-it ${m.id === sel ? 'on' : ''}" href="#clientes/${m.id}" style="text-decoration:none;color:inherit"><span>${esc(m.nombre)}</span><span class="muted" style="font-size:11px">${D.configs[m.id] ? HERR[D.configs[m.id].herramienta] : 'sin configurar'}</span></a>`).join('')}</div>
+  const etiqueta = m => { const c = D.configs[m.id]; return c?.cuenta ? `${HERR[c.herramienta]} · ${esc(c.cuenta)}` : 'sin configurar'; };
+  $('vista').innerHTML = `<div class="head"><h1>Clientes</h1><span class="muted">En qué herramienta y en qué cuenta se carga cada marca</span></div>
+    <div class="lista-cfg"><div class="card marcas">${marcas.map(m => `<a class="marca-it ${m.id === sel ? 'on' : ''}" href="#clientes/${m.id}" style="text-decoration:none;color:inherit"><span>${esc(m.nombre)}</span><span class="muted" style="font-size:11px;text-align:right">${etiqueta(m)}</span></a>`).join('')}</div>
     <div class="card" id="cfgForm"></div></div>`;
   if (sel) formCliente(sel);
 }
 
+/** Si pegan la dirección entera de WoowUp, se queda con la cuenta (campaign.woowup.com/<cuenta>/…). */
+function cuentaDe(valor){
+  const v = (valor || '').trim();
+  const m = v.match(/woowup\.com\/([^/?#\s]+)/i);
+  return (m ? m[1] : v).replace(/^\/+|\/+$/g, '');
+}
+
 function formCliente(marcaId){
-  const c = structuredClone(D.configs[marcaId] || {marca_id:marcaId, herramienta:'woowup', cuenta:'', remitentes:[], dominios_remitente:[], segmentos:{todos:{id:'0', nombre:'Todos los usuarios'}}, utm:{source:'woowup', medium:'email'}, dominios_sitio:[], automatizar:false, extra:{}, notas:''});
-  const segs = Object.entries(c.segmentos || {}).map(([alias, s]) => ({alias, ...s}));
-  const pintar = () => {
-    $('cfgForm').innerHTML = `<h2>${esc(nombreMarca(marcaId))}</h2>
-      <div class="row2"><div><label class="lb" for="cHerr">Herramienta</label><select class="inp" id="cHerr">${Object.entries(HERR).map(([k, v]) => `<option value="${k}" ${c.herramienta === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
-      <div><label class="lb" for="cCuenta">Cuenta (slug o id)</label><input class="inp" id="cCuenta" value="${esc(c.cuenta)}" placeholder="Ej: nombre-de-la-cuenta"></div></div>
-      <label class="lb">Remitentes</label><div class="filas" id="cRems">${c.remitentes.map((r, k) => `<div class="fila" style="grid-template-columns:1fr 1.4fr auto"><input class="inp" data-rn="${k}" value="${esc(r.nombre)}" placeholder="Nombre"><input class="inp" data-re="${k}" value="${esc(r.email)}" placeholder="email@dominio.com"><button class="bt" data-rx="${k}">✕</button></div>`).join('')}</div>
-      <button class="bt sm" id="cAddRem" style="margin-top:6px">+ Remitente</button>
-      <label class="lb" for="cDomRem">Dominios autenticados para enviar (coma)</label><input class="inp" id="cDomRem" value="${esc(c.dominios_remitente.join(', '))}" placeholder="info.marca.com">
-      <label class="lb">Segmentos (alias → id en la herramienta)</label><div class="filas">${segs.map((s, k) => `<div class="fila" style="grid-template-columns:1fr 1fr 1.4fr auto"><input class="inp" data-sa="${k}" value="${esc(s.alias)}" placeholder="alias"><input class="inp" data-si="${k}" value="${esc(s.id)}" placeholder="id"><input class="inp" data-sn="${k}" value="${esc(s.nombre)}" placeholder="Nombre visible"><button class="bt" data-sx="${k}">✕</button></div>`).join('')}</div>
-      <button class="bt sm" id="cAddSeg" style="margin-top:6px">+ Segmento</button>
-      <div class="row2"><div><label class="lb" for="cUtmS">utm_source</label><input class="inp" id="cUtmS" value="${esc(c.utm?.source || '')}"></div><div><label class="lb" for="cUtmM">utm_medium</label><input class="inp" id="cUtmM" value="${esc(c.utm?.medium || '')}"></div></div>
-      <label class="lb" for="cDomSitio">Dominios del sitio: a estos links se les agrega UTM (coma)</label><input class="inp" id="cDomSitio" value="${esc(c.dominios_sitio.join(', '))}" placeholder="marca.com">
-      <label class="lb" for="cNotas">Notas</label><textarea class="inp" id="cNotas">${esc(c.notas || '')}</textarea>
-      <label style="display:flex;gap:8px;margin-top:12px;font-weight:600"><input type="checkbox" id="cAuto" ${c.automatizar ? 'checked' : ''}> Carga automática: botón "Implementar en WoowUp" (requiere la credencial de abajo)</label>
-      ${c.herramienta === 'woowup' ? `<label class="lb" for="cServ">Servicio de envío de WoowUp (prefered_service)</label><input class="inp" id="cServ" inputmode="numeric" value="${esc(c.extra?.woowup?.servicio ?? '')}" placeholder="Ej: 12">` : ''}
-      <div class="acciones"><button class="btn-pri" id="cGuardar">Guardar</button></div>
-      ${c.herramienta === 'woowup' ? `<section style="margin-top:22px;padding-top:16px;border-top:1px solid var(--line)"><h2>Credencial de WoowUp</h2>
-        <p class="nota" id="credEstado">Consultando…</p>
-        <p class="nota">La da WoowUp para esta cuenta. Se guarda en el servidor y no se puede volver a ver desde el hub: solo reemplazar o borrar.</p>
-        <label class="lb" for="credAuth">Authorization</label><input class="inp mono" id="credAuth" type="password" autocomplete="off" placeholder="Ej: Bearer …">
-        <label class="lb" for="credObo">X-ON-BEHALF-OF</label><input class="inp mono" id="credObo" autocomplete="off" placeholder="Cuenta en WoowUp">
-        <div class="acciones"><button class="bt" id="credGuardar">Guardar credencial</button><button class="bt danger" id="credBorrar">Borrar</button></div></section>` : ''}`;
-    const lista = (s) => s.split(/[,\s]+/).map(x => x.trim().toLowerCase()).filter(Boolean);
-    const leer = () => {
-      c.herramienta = $('cHerr').value; c.cuenta = $('cCuenta').value.trim();
-      c.remitentes = c.remitentes.map((r, k) => ({nombre: document.querySelector(`[data-rn="${k}"]`).value.trim(), email: document.querySelector(`[data-re="${k}"]`).value.trim()}));
-      segs.forEach((s, k) => { s.alias = document.querySelector(`[data-sa="${k}"]`).value.trim(); s.id = document.querySelector(`[data-si="${k}"]`).value.trim(); s.nombre = document.querySelector(`[data-sn="${k}"]`).value.trim(); });
-      c.dominios_remitente = lista($('cDomRem').value); c.dominios_sitio = lista($('cDomSitio').value);
-      c.utm = {...c.utm, source: $('cUtmS').value.trim(), medium: $('cUtmM').value.trim()}; c.notas = $('cNotas').value; c.automatizar = $('cAuto').checked;
-      if ($('cServ')) { const sv = parseInt($('cServ').value, 10); c.extra = {...(c.extra || {}), woowup: {...(c.extra?.woowup || {}), servicio: Number.isFinite(sv) ? sv : undefined}}; }
-    };
-    $('cAddRem').onclick = () => { leer(); c.remitentes.push({nombre:'', email:''}); pintar(); };
-    $('cAddSeg').onclick = () => { leer(); segs.push({alias:'', id:'', nombre:''}); pintar(); };
-    $('cfgForm').querySelectorAll('[data-rx]').forEach(b => b.onclick = () => { leer(); c.remitentes.splice(+b.dataset.rx, 1); pintar(); });
-    $('cfgForm').querySelectorAll('[data-sx]').forEach(b => b.onclick = () => { leer(); segs.splice(+b.dataset.sx, 1); pintar(); });
-    if ($('credEstado')) {
-      const pintarCred = t => $('credEstado').textContent = t ? 'Cargada el ' + fechaHora(t) : 'No hay credencial cargada: el botón "Implementar en WoowUp" va a avisar que falta.';
-      api.credencialCargada(marcaId, 'woowup').then(pintarCred, e => $('credEstado').textContent = 'No se pudo consultar (¿falta correr hub-v2.sql?): ' + e.message);
-      $('credGuardar').onclick = async () => {
-        const authorization = $('credAuth').value.trim(), onBehalfOf = $('credObo').value.trim();
-        if (!authorization || !onBehalfOf) return toast('Completá los dos campos', true);
-        try { pintarCred(await api.guardarCredencial(marcaId, 'woowup', {authorization, onBehalfOf})); $('credAuth').value = ''; toast('Credencial guardada'); }
-        catch (e) { toast(e.message, true); }
-      };
-      $('credBorrar').onclick = async () => { try { pintarCred(await api.guardarCredencial(marcaId, 'woowup', {})); toast('Credencial borrada'); } catch (e) { toast(e.message, true); } };
-    }
-    $('cGuardar').onclick = async () => {
-      leer();
-      c.segmentos = Object.fromEntries(segs.filter(s => s.alias && s.id).map(s => [s.alias, {id:s.id, nombre:s.nombre || s.alias}]));
-      c.remitentes = c.remitentes.filter(r => r.email);
-      c.actualizado_por = me.nombre || me.email;
-      try { const f = await api.guardarConfig(c); D.configs[marcaId] = f; toast('Cliente guardado'); vistaClientes(marcaId); }
-      catch (e) { toast(e.message, true); }
-    };
+  const c = structuredClone(D.configs[marcaId] || {marca_id:marcaId, herramienta:'woowup', cuenta:'', notas:''});
+  $('cfgForm').innerHTML = `<h2>${esc(nombreMarca(marcaId))}</h2>
+    <label class="lb" for="cHerr">Herramienta</label>
+    <select class="inp" id="cHerr">${Object.entries(HERR).map(([k, v]) => `<option value="${k}" ${c.herramienta === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+    <label class="lb" for="cCuenta">Cuenta</label>
+    <input class="inp" id="cCuenta" value="${esc(c.cuenta || '')}" placeholder="Ej: randers">
+    <p class="nota" id="cAyuda"></p>
+    <label class="lb" for="cNotas"><span>Notas</span><span class="cnt">opcional</span></label>
+    <textarea class="inp" id="cNotas" placeholder="Ej: los productos se agregan en el editor de la herramienta">${esc(c.notas || '')}</textarea>
+    <div class="acciones"><button class="btn-pri" id="cGuardar">Guardar</button></div>`;
+  const ayuda = () => {
+    $('cAyuda').innerHTML = $('cHerr').value === 'woowup'
+      ? 'Es lo que aparece en la dirección de WoowUp cuando entrás a la marca: campaign.woowup.com/<b>cuenta</b>/campaigns. También podés pegar la dirección entera.'
+      : 'El nombre o ID de la cuenta en la herramienta.';
   };
-  pintar();
+  ayuda();
+  $('cHerr').onchange = ayuda;
+  $('cCuenta').onchange = () => { $('cCuenta').value = cuentaDe($('cCuenta').value); };
+  $('cGuardar').onclick = async () => {
+    c.herramienta = $('cHerr').value;
+    c.cuenta = cuentaDe($('cCuenta').value);
+    c.notas = $('cNotas').value;
+    c.actualizado_por = me.nombre || me.email;
+    if (!c.cuenta) return toast('Falta la cuenta', true);
+    try { const f = await api.guardarConfig(c); D.configs[marcaId] = f; toast('Cliente guardado'); vistaClientes(marcaId); }
+    catch (e) { toast(e.message, true); }
+  };
 }
 
 // ══ ACCESOS (admin) ═════════════════════════════════════════════════════════
