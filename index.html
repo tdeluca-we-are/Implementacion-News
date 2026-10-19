@@ -203,7 +203,7 @@ import { prepararCampana, ErrorPreparacion } from './lib/hub/nucleo.js';
 import { hoyArgentina } from './lib/input/validar.js';
 import { PERFILES } from './lib/tools/perfiles.js';
 
-const VERSION_APP = '2026-10-18.1';
+const VERSION_APP = '2026-10-19.1';
 const SB_URL  = 'https://ojzcxwhoinmljospgmfp.supabase.co';
 const SB_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qemN4d2hvaW5tbGpvc3BnbWZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5MDY5MTYsImV4cCI6MjA5MzQ4MjkxNn0.jmvVP3weuclrBpQJb57BwmHD77Ofy4CDe43cnmiSFCk';
 const BUCKET = 'nws-piezas';
@@ -250,6 +250,19 @@ function apiSupabase(){
     async subir(path, file){ await q(sb.storage.from(BUCKET).upload(path, file, {upsert:false, contentType:file.type})); return sb.storage.from(BUCKET).getPublicUrl(path).data.publicUrl; },
     async guardarUsuario(u){ return (await q(u.id ? sb.from('nws_usuarios').update(u).eq('id', u.id).select() : sb.from('nws_usuarios').insert(u).select()))[0]; },
     async marcasDeUsuario(uid, ids){ await q(sb.from('nws_usuario_marcas').delete().eq('usuario_id', uid)); if (ids.length) await q(sb.from('nws_usuario_marcas').insert(ids.map(m => ({usuario_id:uid, marca_id:m})))); },
+    // Carga automática: la hace la función de servidor nws-woowup con la credencial del cliente.
+    async implementar(news_id, accion){
+      const r = await sb.functions.invoke('nws-woowup', {body:{accion, news_id}});
+      if (r.error) {
+        let m = r.error.message || 'Error en la carga automática';
+        try { m = (await r.error.context.json()).error || m; } catch {}
+        if (/Failed to send a request/i.test(m)) m = 'La función nws-woowup no está publicada en Supabase (Edge Functions).';
+        throw new Error(m);
+      }
+      return r.data;
+    },
+    async credencialCargada(m, h){ const r = await sb.rpc('nws_credencial_cargada', {m, h}); if (r.error) throw r.error; return r.data; },
+    async guardarCredencial(m, h, d){ const r = await sb.rpc('nws_guardar_credencial', {m, h, d}); if (r.error) throw r.error; return r.data; },
   };
 }
 
@@ -258,10 +271,10 @@ function apiDemo(){
   const db = {
     marcas: [{id:1, nombre:'Marca demo', activa:true}, {id:2, nombre:'Otra marca demo', activa:true}],
     configs: [
-      {marca_id:1, herramienta:'woowup', cuenta:'marca-demo', remitentes:[{nombre:'Marca Demo', email:'newsletter@marca-demo.com'}], dominios_remitente:['marca-demo.com'], segmentos:{todos:{id:'0', nombre:'Todos los usuarios'}, compradores:{id:'100001', nombre:'Compradores 2026'}}, utm:{source:'woowup', medium:'email'}, dominios_sitio:['marca-demo.com'], automatizar:false, extra:{}},
+      {marca_id:1, herramienta:'woowup', cuenta:'marca-demo', remitentes:[{nombre:'Marca Demo', email:'newsletter@marca-demo.com'}], dominios_remitente:['marca-demo.com'], segmentos:{todos:{id:'0', nombre:'Todos los usuarios'}, compradores:{id:'100001', nombre:'Compradores 2026'}}, utm:{source:'woowup', medium:'email'}, dominios_sitio:['marca-demo.com'], automatizar:true, extra:{woowup:{servicio:12}}},
     ],
     usuarios: [{id:1, email:'demo@we-are.com.ar', nombre:'Usuario demo', rol:'admin', activo:true}],
-    um: [], news: [], eventos: [], id: 1,
+    um: [], news: [], eventos: [], id: 1, cred: {1: new Date().toISOString()},
   };
   const evento = (n, accion, detalle) => db.eventos.unshift({id:Date.now(), news_id:n.id, marca_id:n.marca_id, en:ahora(), usuario:'Usuario demo', accion, detalle});
   return {
@@ -288,6 +301,19 @@ function apiDemo(){
     async subir(_path, file){ return URL.createObjectURL(file); },
     async guardarUsuario(u){ if (!u.id){ u.id = db.usuarios.length + 1; db.usuarios.push(u); } else Object.assign(db.usuarios.find(x => x.id === u.id), u); return u; },
     async marcasDeUsuario(uid, ids){ db.um = db.um.filter(x => x.usuario_id !== uid).concat(ids.map(m => ({usuario_id:uid, marca_id:m}))); },
+    async implementar(news_id, accion){
+      // Simula la función de servidor: mismas reglas, sin tocar WoowUp.
+      await new Promise(r => setTimeout(r, 700));
+      const n = db.news.find(x => x.id === news_id);
+      if (accion === 'programar') throw new Error(`Programar desde el hub todavía no está disponible. Programala en WoowUp (#${n.id_externo}) para el ${n.fecha_envio} a las ${n.hora_envio} y marcala como cargada.`);
+      if (n.n_errores) throw new Error('La news tiene errores de validación: corregilos antes de implementar.');
+      const nueva = !n.id_externo; n.id_externo = n.id_externo || String(700000 + n.id);
+      n.implementado_huella = n.huella; n.implementado_at = ahora(); if (n.estado === 'borrador') n.estado = 'lista';
+      evento(n, 'implementada', `${nueva ? 'Borrador creado' : 'Borrador actualizado'} en WoowUp (#${n.id_externo}) · test a ${(n.input.emailsTest || []).length} destinatario(s) (demo: no se envió nada)`);
+      return {ok:true, idExterno:n.id_externo, url:'#', mensaje:`Demo: campaña #${n.id_externo} simulada; en la real llega el test a ${(n.input.emailsTest || []).join(', ')}.`};
+    },
+    async credencialCargada(m){ return db.cred[m] || null; },
+    async guardarCredencial(m, _h, d){ db.cred[m] = d && Object.keys(d).length ? ahora() : null; return db.cred[m]; },
   };
 }
 
@@ -626,26 +652,44 @@ function pintarLado(){
   const puede = puedeEditar(cur.marca_id);
   const cfg = D.configs[cur.marca_id];
   const herr = cfg ? HERR[cfg.herramienta] : 'la herramienta';
+  const auto = !!(cfg?.automatizar && cfg.herramienta === 'woowup');
+  const testAlDia = !!prep && cur.implementado_huella === prep.huella;
+  const linkCampana = cur.id_externo && cfg ? `<a href="https://campaign.woowup.com/${encodeURIComponent(cfg.cuenta)}/campaigns/${encodeURIComponent(cur.id_externo)}/edit?step=4" target="_blank" rel="noopener">#${esc(cur.id_externo)}</a>` : '';
   let acciones = '';
-  if (puede && cur.estado === 'borrador') acciones = `<button class="btn-pri" id="aLista" ${sinErrores ? '' : 'disabled'}>Marcar lista para aprobar</button>`;
-  if (puede && cur.estado === 'lista') acciones = `<button class="btn-pri" id="aAprobar" ${sinErrores ? '' : 'disabled'}>Aprobar</button><button class="bt" id="aBorrador">Volver a borrador</button>`;
-  if (puede && cur.estado === 'aprobada') acciones = `<button class="btn-pri" id="aCargada">Marcar como cargada en ${esc(herr)}</button>`;
+  if (auto) {
+    // Carga automática: implementar (crea la campaña y manda el test) → aprobar → programar.
+    if (puede && ['borrador', 'lista'].includes(cur.estado)) {
+      acciones = testAlDia
+        ? `<button class="btn-pri" id="aAprobar">Aprobar</button><button class="bt" id="aImpl">Volver a implementar</button>`
+        : `<button class="btn-pri" id="aImpl" ${sinErrores ? '' : 'disabled'}>${cur.id_externo ? 'Actualizar en WoowUp y reenviar test' : 'Implementar en WoowUp'}</button>`;
+    }
+    if (puede && cur.estado === 'aprobada') acciones = `<button class="btn-pri" id="aProg">Programar en WoowUp</button><button class="bt" id="aCargada">Ya la programé a mano</button>`;
+  } else {
+    if (puede && cur.estado === 'borrador') acciones = `<button class="btn-pri" id="aLista" ${sinErrores ? '' : 'disabled'}>Marcar lista para aprobar</button>`;
+    if (puede && cur.estado === 'lista') acciones = `<button class="btn-pri" id="aAprobar" ${sinErrores ? '' : 'disabled'}>Aprobar</button><button class="bt" id="aBorrador">Volver a borrador</button>`;
+    if (puede && cur.estado === 'aprobada') acciones = `<button class="btn-pri" id="aCargada">Marcar como cargada en ${esc(herr)}</button>`;
+  }
   if (puede && !['cargada', 'cancelada'].includes(cur.estado)) acciones += `<button class="bt danger" id="aCancelar">Cancelar news</button>`;
-  const notaEstado = {
+  const notaAuto = !auto ? null : {
+    borrador: sinErrores ? 'Sin errores. "Implementar en WoowUp" crea la campaña y te manda el test.' : 'Corregí los errores para poder implementarla.',
+    lista: testAlDia ? `Test enviado de esta versión (campaña ${linkCampana}). Revisalo en tu casilla y, si está bien, aprobá.` : (cur.id_externo ? `Cambió algo desde el último test (campaña ${linkCampana}): actualizá y revisá el test nuevo antes de aprobar.` : 'Implementá en WoowUp para recibir el test.'),
+    aprobada: `Aprobada por ${esc(cur.aprobado_por || '')} el ${fechaHora(cur.aprobado_at)} (campaña ${linkCampana}). Falta programar.`,
+  }[cur.estado];
+  const notaEstado = notaAuto || {
     borrador: sinErrores ? 'Sin errores. Cuando esté completa, marcala lista para que alguien la apruebe.' : 'Corregí los errores para poder pasarla a aprobación.',
     lista: 'Mandá el test desde la herramienta, revisalo y aprobá. La aprobación queda atada a esta versión exacta.',
     aprobada: `Aprobada por ${esc(cur.aprobado_por || '')} el ${fechaHora(cur.aprobado_at)}. Si cambia algo, se cae la aprobación sola.`,
     cargada: `Cargada por ${esc(cur.cargado_por || '')} el ${fechaHora(cur.cargado_at)}${cur.id_externo ? ' · id ' + esc(cur.id_externo) : ''}.`,
     cancelada: 'Cancelada.',
   }[cur.estado];
-  const auto = cfg?.herramienta === 'woowup'
-    ? `<p class="nota">Carga automática en WoowUp: ${cfg.automatizar ? 'habilitada en esta cuenta, falta conectar la credencial del servidor.' : 'pendiente de la credencial oficial de WoowUp. Mientras tanto, usá los datos para pegar.'}</p>` : '';
+  const notaAutoPie = cfg?.herramienta === 'woowup' && !auto
+    ? '<p class="nota">Carga automática en WoowUp: se habilita en Clientes cuando haya credencial de WoowUp. Mientras tanto, usá los datos para pegar.</p>' : '';
 
   el.innerHTML = `
     <section class="card">
       <div class="estado-bar"><span class="est ${cur.estado}">${EST[cur.estado]}</span><span class="muted mono">huella ${esc(prep?.huella || '—')}</span><span class="sp"></span><span class="muted" id="guardado"></span></div>
       <p class="nota">${notaEstado}</p>
-      <div class="acciones">${acciones}</div>${auto}
+      <div class="acciones">${acciones}</div>${notaAutoPie}
     </section>
     <section class="card"><h2>Validación</h2>
       <div class="resumen"><span class="cuenta-e">${n.error} errores</span><span class="cuenta-a">${n.aviso} avisos</span><span class="muted">${n.info} info</span></div>
@@ -671,6 +715,8 @@ function pintarLado(){
   if ($('aBorrador')) $('aBorrador').onclick = () => cambiarEstado('borrador');
   if ($('aAprobar')) $('aAprobar').onclick = modalAprobar;
   if ($('aCargada')) $('aCargada').onclick = modalCargada;
+  if ($('aImpl')) $('aImpl').onclick = e => implementar('armar', e.target);
+  if ($('aProg')) $('aProg').onclick = e => implementar('programar', e.target);
   if ($('aCancelar')) $('aCancelar').onclick = () => abrirModal(`<h3>Cancelar news</h3><p class="muted">Queda en el registro y no se puede editar más.</p><div class="ft"><button class="bt" data-cerrar>Volver</button><button class="btn-pri" id="okCancelar">Cancelar news</button></div>`, () => $('okCancelar').onclick = () => { cerrarModal(); cambiarEstado('cancelada'); });
   pintarRegistro();
 }
@@ -687,7 +733,7 @@ function htmlParaPrevia(){
 function filaParaGuardar(){
   const hs = prep ? prep.hallazgos : (errPrep || []);
   return {
-    nombre: cur.nombre, fecha_envio: cur.fecha_envio || null, hora_envio: cur.hora_envio || null, input: cur.input || {},
+    nombre: cur.nombre, fecha_envio: cur.fecha_envio || null, hora_envio: cur.hora_envio || null, input: {...(cur.input || {}), utmFinal: prep?.utm},
     contenido: cur.contenido, html: cur.contenido === 'html' ? (cur.html || '') : null,
     piezas: (cur.piezas || []).map((p, k) => ({...p, ancho: prep?.piezas?.[k]?.medidas?.ancho, alto: prep?.piezas?.[k]?.medidas?.alto, sha: prep?.piezas?.[k]?.sha})),
     html_final: prep?.htmlFinal || null, huella: prep?.huella || null,
@@ -704,7 +750,7 @@ async function guardar(extra = {}){
   try {
     const antes = cur.estado;
     const n = await api.guardarNews(cur.id, fila);
-    Object.assign(cur, {estado:n.estado, aprobado_por:n.aprobado_por, aprobado_at:n.aprobado_at, aprobado_huella:n.aprobado_huella, cargado_por:n.cargado_por, cargado_at:n.cargado_at, id_externo:n.id_externo});
+    Object.assign(cur, {estado:n.estado, aprobado_por:n.aprobado_por, aprobado_at:n.aprobado_at, aprobado_huella:n.aprobado_huella, cargado_por:n.cargado_por, cargado_at:n.cargado_at, id_externo:n.id_externo, implementado_huella:n.implementado_huella, implementado_at:n.implementado_at});
     const i = D.news.findIndex(x => x.id === cur.id); if (i >= 0) D.news[i] = {...D.news[i], ...n};
     if (antes !== n.estado || extra.estado) { pintarLado(); if (['aprobada','cargada'].includes(antes) && n.estado !== antes && !extra.estado) toast('Cambió el contenido: la aprobación se cayó y hay que aprobar de nuevo', true); }
     if ($('guardado')) $('guardado').textContent = 'Guardado ' + new Date().toLocaleTimeString('es-AR', {hour:'2-digit', minute:'2-digit'});
@@ -720,7 +766,26 @@ async function cambiarEstado(estado, extra = {}){
   }
 }
 
+async function implementar(accion, btn){
+  const texto = btn.textContent; btn.disabled = true; btn.textContent = accion === 'armar' ? 'Cargando en WoowUp…' : 'Programando…';
+  try {
+    if (accion === 'armar' && !(await guardar())) return;
+    const r = await api.implementar(cur.id, accion);
+    toast(r.mensaje);
+    const n = await api.newsUna(cur.id);
+    Object.assign(cur, {estado:n.estado, id_externo:n.id_externo, implementado_huella:n.implementado_huella, implementado_at:n.implementado_at});
+    const i = D.news.findIndex(x => x.id === cur.id); if (i >= 0) D.news[i] = {...D.news[i], estado:n.estado};
+    pintarLado(); cargarEventos();
+  } catch (e) {
+    toast(e.message || String(e), true);
+  } finally {
+    if (btn.isConnected) { btn.disabled = false; btn.textContent = texto; }
+  }
+}
+
 function modalAprobar(){
+  const cfg = D.configs[cur.marca_id];
+  if (cfg?.automatizar && cur.implementado_huella !== prep.huella) return toast('El test que se mandó es de otra versión: implementá de nuevo antes de aprobar', true);
   abrirModal(`<h3>Aprobar news</h3>
     <p class="muted">Aprobás esta versión exacta. Si después cambia el asunto, una pieza, un link o el segmento, la aprobación se cae sola.</p>
     <div class="campo"><span class="et">Asunto</span><span class="val">${esc(prep.input.asunto)}</span><span></span></div>
@@ -771,8 +836,15 @@ function formCliente(marcaId){
       <div class="row2"><div><label class="lb" for="cUtmS">utm_source</label><input class="inp" id="cUtmS" value="${esc(c.utm?.source || '')}"></div><div><label class="lb" for="cUtmM">utm_medium</label><input class="inp" id="cUtmM" value="${esc(c.utm?.medium || '')}"></div></div>
       <label class="lb" for="cDomSitio">Dominios del sitio: a estos links se les agrega UTM (coma)</label><input class="inp" id="cDomSitio" value="${esc(c.dominios_sitio.join(', '))}" placeholder="marca.com">
       <label class="lb" for="cNotas">Notas</label><textarea class="inp" id="cNotas">${esc(c.notas || '')}</textarea>
-      <label style="display:flex;gap:8px;margin-top:12px;font-weight:600"><input type="checkbox" id="cAuto" ${c.automatizar ? 'checked' : ''}> Carga automática por API (requiere credencial de la herramienta en el servidor)</label>
-      <div class="acciones"><button class="btn-pri" id="cGuardar">Guardar</button></div>`;
+      <label style="display:flex;gap:8px;margin-top:12px;font-weight:600"><input type="checkbox" id="cAuto" ${c.automatizar ? 'checked' : ''}> Carga automática: botón "Implementar en WoowUp" (requiere la credencial de abajo)</label>
+      ${c.herramienta === 'woowup' ? `<label class="lb" for="cServ">Servicio de envío de WoowUp (prefered_service)</label><input class="inp" id="cServ" inputmode="numeric" value="${esc(c.extra?.woowup?.servicio ?? '')}" placeholder="Ej: 12">` : ''}
+      <div class="acciones"><button class="btn-pri" id="cGuardar">Guardar</button></div>
+      ${c.herramienta === 'woowup' ? `<section style="margin-top:22px;padding-top:16px;border-top:1px solid var(--line)"><h2>Credencial de WoowUp</h2>
+        <p class="nota" id="credEstado">Consultando…</p>
+        <p class="nota">La da WoowUp para esta cuenta. Se guarda en el servidor y no se puede volver a ver desde el hub: solo reemplazar o borrar.</p>
+        <label class="lb" for="credAuth">Authorization</label><input class="inp mono" id="credAuth" type="password" autocomplete="off" placeholder="Ej: Bearer …">
+        <label class="lb" for="credObo">X-ON-BEHALF-OF</label><input class="inp mono" id="credObo" autocomplete="off" placeholder="Cuenta en WoowUp">
+        <div class="acciones"><button class="bt" id="credGuardar">Guardar credencial</button><button class="bt danger" id="credBorrar">Borrar</button></div></section>` : ''}`;
     const lista = (s) => s.split(/[,\s]+/).map(x => x.trim().toLowerCase()).filter(Boolean);
     const leer = () => {
       c.herramienta = $('cHerr').value; c.cuenta = $('cCuenta').value.trim();
@@ -780,11 +852,23 @@ function formCliente(marcaId){
       segs.forEach((s, k) => { s.alias = document.querySelector(`[data-sa="${k}"]`).value.trim(); s.id = document.querySelector(`[data-si="${k}"]`).value.trim(); s.nombre = document.querySelector(`[data-sn="${k}"]`).value.trim(); });
       c.dominios_remitente = lista($('cDomRem').value); c.dominios_sitio = lista($('cDomSitio').value);
       c.utm = {...c.utm, source: $('cUtmS').value.trim(), medium: $('cUtmM').value.trim()}; c.notas = $('cNotas').value; c.automatizar = $('cAuto').checked;
+      if ($('cServ')) { const sv = parseInt($('cServ').value, 10); c.extra = {...(c.extra || {}), woowup: {...(c.extra?.woowup || {}), servicio: Number.isFinite(sv) ? sv : undefined}}; }
     };
     $('cAddRem').onclick = () => { leer(); c.remitentes.push({nombre:'', email:''}); pintar(); };
     $('cAddSeg').onclick = () => { leer(); segs.push({alias:'', id:'', nombre:''}); pintar(); };
     $('cfgForm').querySelectorAll('[data-rx]').forEach(b => b.onclick = () => { leer(); c.remitentes.splice(+b.dataset.rx, 1); pintar(); });
     $('cfgForm').querySelectorAll('[data-sx]').forEach(b => b.onclick = () => { leer(); segs.splice(+b.dataset.sx, 1); pintar(); });
+    if ($('credEstado')) {
+      const pintarCred = t => $('credEstado').textContent = t ? 'Cargada el ' + fechaHora(t) : 'No hay credencial cargada: el botón "Implementar en WoowUp" va a avisar que falta.';
+      api.credencialCargada(marcaId, 'woowup').then(pintarCred, e => $('credEstado').textContent = 'No se pudo consultar (¿falta correr hub-v2.sql?): ' + e.message);
+      $('credGuardar').onclick = async () => {
+        const authorization = $('credAuth').value.trim(), onBehalfOf = $('credObo').value.trim();
+        if (!authorization || !onBehalfOf) return toast('Completá los dos campos', true);
+        try { pintarCred(await api.guardarCredencial(marcaId, 'woowup', {authorization, onBehalfOf})); $('credAuth').value = ''; toast('Credencial guardada'); }
+        catch (e) { toast(e.message, true); }
+      };
+      $('credBorrar').onclick = async () => { try { pintarCred(await api.guardarCredencial(marcaId, 'woowup', {})); toast('Credencial borrada'); } catch (e) { toast(e.message, true); } };
+    }
     $('cGuardar').onclick = async () => {
       leer();
       c.segmentos = Object.fromEntries(segs.filter(s => s.alias && s.id).map(s => [s.alias, {id:s.id, nombre:s.nombre || s.alias}]));
