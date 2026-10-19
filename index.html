@@ -203,7 +203,7 @@ import { prepararCampana, ErrorPreparacion } from './lib/hub/nucleo.js';
 import { hoyArgentina } from './lib/input/validar.js';
 import { PERFILES } from './lib/tools/perfiles.js';
 
-const VERSION_APP = '2026-10-19.2';
+const VERSION_APP = '2026-10-19.3';
 const SB_URL  = 'https://ojzcxwhoinmljospgmfp.supabase.co';
 const SB_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qemN4d2hvaW5tbGpvc3BnbWZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5MDY5MTYsImV4cCI6MjA5MzQ4MjkxNn0.jmvVP3weuclrBpQJb57BwmHD77Ofy4CDe43cnmiSFCk';
 const BUCKET = 'nws-piezas';
@@ -547,7 +547,7 @@ function pintarEditor(){
         <section class="card"><h2>Contenido</h2>
           <div class="tabs"><button class="tab ${n.contenido === 'piezas' ? 'on' : ''}" data-cont="piezas" ${dis}>Imágenes (JPG/PNG)</button><button class="tab ${n.contenido === 'html' ? 'on' : ''}" data-cont="html" ${dis}>HTML de Atlas</button></div>
           <div id="contPiezas" ${n.contenido === 'piezas' ? '' : 'hidden'}>
-            ${editable() ? '<label class="drop" id="drop" for="fFiles">Arrastrá las piezas acá o hacé clic para elegirlas. Se ordenan por nombre; después podés moverlas.<input type="file" id="fFiles" accept="image/png,image/jpeg,image/gif" multiple hidden></label>' : ''}
+            ${editable() ? '<label class="drop" id="drop" for="fFiles">Arrastrá las piezas acá o hacé clic para elegirlas. Se ordenan por nombre; después podés moverlas.<input type="file" id="fFiles" accept="image/png,image/jpeg,image/gif" multiple hidden></label><div style="margin-top:8px"><button class="bt sm" id="fDrive" type="button">Importar desde Drive</button> <span class="muted" style="font-size:12px">pegás el link de la carpeta o de la imagen</span></div>' : ''}
             <div id="listaPiezas"></div>
             <label class="lb" for="fPie">Texto al pie (recomendado: un mail de solo imágenes entrega peor)</label>
             <textarea class="inp" id="fPie" ${dis}>${esc(i.textoPie || '')}</textarea>
@@ -581,6 +581,7 @@ function pintarEditor(){
   if (!i.segmento && segs[0]) setI('segmento', segs[0][0]);
   document.querySelectorAll('[data-cont]').forEach(b => b.onclick = () => { cur.contenido = b.dataset.cont; pintarEditor(); recalcular(); programarGuardado(); });
   if ($('fHtmlFile')) $('fHtmlFile').onchange = async e => { const f = e.target.files[0]; if (!f) return; cur.html = await f.text(); $('fHtml').value = cur.html; pintarPlaceholders(); recalcular(); programarGuardado(); };
+  if ($('fDrive')) $('fDrive').onclick = modalDrive;
   if ($('fFiles')) {
     $('fFiles').onchange = e => subirPiezas([...e.target.files]);
     const d = $('drop');
@@ -776,6 +777,67 @@ async function cambiarEstado(estado, extra = {}){
   }
 }
 
+/** Pedido a la extensión por el puente del hub; responde con "<tipo>-respuesta". */
+function pedirExtension(tipo, datos, ms = 60000){
+  const id = Math.random().toString(36).slice(2);
+  return new Promise(res => {
+    const oir = e => { if (e.source === window && e.data?.nws === tipo + '-respuesta' && e.data.id === id) { removeEventListener('message', oir); clearTimeout(t); res(e.data); } };
+    const t = setTimeout(() => { removeEventListener('message', oir); res({ok:false, error:'La extensión no respondió. Recargá la página y probá de nuevo.'}); }, ms);
+    addEventListener('message', oir);
+    postMessage({nws:tipo, id, ...datos}, location.origin);
+  });
+}
+
+/** Elegir fotos de una carpeta o imagen de Drive (las trae la extensión con la sesión de Google de la persona). */
+function modalDrive(){
+  if (!document.documentElement.dataset.nwsExtension) return modalExtension();
+  if (api.demo) return toast('En la demo no se importa de Drive', true);
+  const elegidas = new Map();
+  abrirModal(`<h3>Importar desde Drive</h3>
+    <p class="muted">Pegá el link de la carpeta o de la imagen. Tenés que poder abrirlo con la cuenta de Google de este Chrome.</p>
+    <div style="display:flex;gap:8px"><input class="inp" id="dLink" placeholder="https://drive.google.com/drive/folders/…"><button class="btn-pri" id="dBuscar">Buscar</button></div>
+    <div id="dRes" style="margin-top:12px;max-height:55vh;overflow:auto"></div>
+    <div class="ft"><button class="bt" data-cerrar>Cancelar</button><button class="btn-pri" id="dAgregar" disabled>Agregar</button></div>`);
+  $('modal').style.width = '760px';
+  const pintarBoton = () => { $('dAgregar').disabled = !elegidas.size; $('dAgregar').textContent = elegidas.size ? `Agregar ${elegidas.size} como pieza${elegidas.size > 1 ? 's' : ''}` : 'Agregar'; };
+  const buscar = async (link) => {
+    $('dRes').innerHTML = '<p class="muted">Buscando en Drive…</p>';
+    const r = await pedirExtension('drive-listar', {link});
+    if (!r.ok) { $('dRes').innerHTML = `<p class="cuenta-e">${esc(r.error)}</p>`; return; }
+    elegidas.clear(); pintarBoton();
+    const carpetas = (r.carpetas || []).map(c => `<button class="chip" data-carp="${esc(c.id)}">📁 ${esc(c.nombre)}</button>`).join(' ');
+    const fotos = (r.imagenes || []).map(i => `<label style="display:flex;flex-direction:column;gap:4px;cursor:pointer;border:2px solid transparent;border-radius:8px;padding:4px" data-foto="${esc(i.id)}">
+        ${i.miniatura ? `<img src="${i.miniatura}" alt="" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;background:var(--soft)">` : '<div style="aspect-ratio:1;background:var(--soft);border-radius:6px"></div>'}
+        <span style="font-size:11.5px;word-break:break-all"><input type="checkbox"> ${esc(i.nombre)}</span></label>`).join('');
+    $('dRes').innerHTML = (r.carpeta ? `<p style="font-weight:700;margin:0 0 8px">${esc(r.carpeta)}</p>` : '')
+      + (carpetas ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">${carpetas}</div>` : '')
+      + (fotos ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px">${fotos}</div>` : '<p class="muted">No hay imágenes en este link.</p>')
+      + (r.recortada ? '<p class="nota">Se muestran las primeras 80 imágenes.</p>' : '');
+    $('dRes').querySelectorAll('[data-carp]').forEach(b => b.onclick = () => buscar('https://drive.google.com/drive/folders/' + b.dataset.carp));
+    $('dRes').querySelectorAll('[data-foto]').forEach(l => {
+      const cb = l.querySelector('input'), info = r.imagenes.find(i => i.id === l.dataset.foto);
+      cb.onchange = () => { if (cb.checked) elegidas.set(info.id, info); else elegidas.delete(info.id); l.style.borderColor = cb.checked ? 'var(--acc)' : 'transparent'; pintarBoton(); };
+    });
+    if ((r.imagenes || []).length === 1 && !(r.carpetas || []).length) { const cb = $('dRes').querySelector('input'); cb.checked = true; cb.onchange(); }
+  };
+  $('dBuscar').onclick = () => { const v = $('dLink').value.trim(); if (v) buscar(v); };
+  $('dLink').onkeydown = e => { if (e.key === 'Enter') $('dBuscar').click(); };
+  $('dLink').focus();
+  $('dAgregar').onclick = async () => {
+    $('dAgregar').disabled = true; $('dAgregar').textContent = 'Bajando de Drive…';
+    const files = [];
+    for (const info of elegidas.values()) {
+      const r = await pedirExtension('drive-descargar', {driveId: info.id}, 120000);
+      if (!r.ok) { toast(`${info.nombre}: ${r.error}`, true); continue; }
+      const bytes = Uint8Array.from(atob(r.base64), c => c.charCodeAt(0));
+      const nombre = /\.(jpe?g|png|gif|webp)$/i.test(r.nombre) ? r.nombre : (info.nombre || r.nombre);
+      files.push(new File([bytes], nombre, {type: r.tipo}));
+    }
+    cerrarModal(); $('modal').style.width = '';
+    if (files.length) subirPiezas(files);
+  };
+}
+
 /** Le pasa la news a la extensión, que abre WoowUp y completa la pantalla. */
 async function cargarEnWoowup(btn){
   if (!document.documentElement.dataset.nwsExtension) return modalExtension();
@@ -966,7 +1028,7 @@ function abrirModal(html, alAbrir){
   $('modal').querySelectorAll('[data-cerrar]').forEach(b => b.onclick = cerrarModal);
   if (alAbrir) alAbrir();
 }
-function cerrarModal(){ $('ov').classList.remove('on'); }
+function cerrarModal(){ $('ov').classList.remove('on'); $('modal').style.width = ''; }
 $('ov').onclick = e => { if (e.target === $('ov')) cerrarModal(); };
 document.addEventListener('keydown', e => { if (e.key === 'Escape') cerrarModal(); });
 window.addEventListener('beforeunload', e => { if (timerGuardar && cur) { guardar(); e.preventDefault(); } });
