@@ -203,7 +203,7 @@ import { prepararCampana, ErrorPreparacion } from './lib/hub/nucleo.js';
 import { hoyArgentina } from './lib/input/validar.js';
 import { PERFILES } from './lib/tools/perfiles.js';
 
-const VERSION_APP = '2026-10-19.1';
+const VERSION_APP = '2026-10-19.2';
 const SB_URL  = 'https://ojzcxwhoinmljospgmfp.supabase.co';
 const SB_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qemN4d2hvaW5tbGpvc3BnbWZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5MDY5MTYsImV4cCI6MjA5MzQ4MjkxNn0.jmvVP3weuclrBpQJb57BwmHD77Ofy4CDe43cnmiSFCk';
 const BUCKET = 'nws-piezas';
@@ -262,6 +262,7 @@ function apiSupabase(){
       return r.data;
     },
     async credencialCargada(m, h){ const r = await sb.rpc('nws_credencial_cargada', {m, h}); if (r.error) throw r.error; return r.data; },
+    async evento(n, accion, detalle){ await q(sb.from('nws_eventos').insert({news_id:n.id, marca_id:n.marca_id, accion, detalle, usuario: me.nombre || me.email})); },
     async guardarCredencial(m, h, d){ const r = await sb.rpc('nws_guardar_credencial', {m, h, d}); if (r.error) throw r.error; return r.data; },
   };
 }
@@ -271,7 +272,7 @@ function apiDemo(){
   const db = {
     marcas: [{id:1, nombre:'Marca demo', activa:true}, {id:2, nombre:'Otra marca demo', activa:true}],
     configs: [
-      {marca_id:1, herramienta:'woowup', cuenta:'marca-demo', remitentes:[{nombre:'Marca Demo', email:'newsletter@marca-demo.com'}], dominios_remitente:['marca-demo.com'], segmentos:{todos:{id:'0', nombre:'Todos los usuarios'}, compradores:{id:'100001', nombre:'Compradores 2026'}}, utm:{source:'woowup', medium:'email'}, dominios_sitio:['marca-demo.com'], automatizar:true, extra:{woowup:{servicio:12}}},
+      {marca_id:1, herramienta:'woowup', cuenta:'marca-demo', remitentes:[{nombre:'Marca Demo', email:'newsletter@marca-demo.com'}], dominios_remitente:['marca-demo.com'], segmentos:{todos:{id:'0', nombre:'Todos los usuarios'}, compradores:{id:'100001', nombre:'Compradores 2026'}}, utm:{source:'woowup', medium:'email'}, dominios_sitio:['marca-demo.com'], automatizar:false, extra:{woowup:{servicio:12}}},
     ],
     usuarios: [{id:1, email:'demo@we-are.com.ar', nombre:'Usuario demo', rol:'admin', activo:true}],
     um: [], news: [], eventos: [], id: 1, cred: {1: new Date().toISOString()},
@@ -313,6 +314,7 @@ function apiDemo(){
       return {ok:true, idExterno:n.id_externo, url:'#', mensaje:`Demo: campaña #${n.id_externo} simulada; en la real llega el test a ${(n.input.emailsTest || []).join(', ')}.`};
     },
     async credencialCargada(m){ return db.cred[m] || null; },
+    async evento(n, accion, detalle){ evento(n, accion, detalle); },
     async guardarCredencial(m, _h, d){ db.cred[m] = d && Object.keys(d).length ? ahora() : null; return db.cred[m]; },
   };
 }
@@ -668,6 +670,9 @@ function pintarLado(){
     if (puede && cur.estado === 'borrador') acciones = `<button class="btn-pri" id="aLista" ${sinErrores ? '' : 'disabled'}>Marcar lista para aprobar</button>`;
     if (puede && cur.estado === 'lista') acciones = `<button class="btn-pri" id="aAprobar" ${sinErrores ? '' : 'disabled'}>Aprobar</button><button class="bt" id="aBorrador">Volver a borrador</button>`;
     if (puede && cur.estado === 'aprobada') acciones = `<button class="btn-pri" id="aCargada">Marcar como cargada en ${esc(herr)}</button>`;
+    if (puede && cfg?.herramienta === 'woowup' && sinErrores && ['borrador', 'lista', 'aprobada'].includes(cur.estado)) {
+      acciones = `<button class="btn-pri" id="aExt">Cargar en WoowUp</button>` + acciones.replace('class="btn-pri"', 'class="bt"');
+    }
   }
   if (puede && !['cargada', 'cancelada'].includes(cur.estado)) acciones += `<button class="bt danger" id="aCancelar">Cancelar news</button>`;
   const notaAuto = !auto ? null : {
@@ -682,8 +687,12 @@ function pintarLado(){
     cargada: `Cargada por ${esc(cur.cargado_por || '')} el ${fechaHora(cur.cargado_at)}${cur.id_externo ? ' · id ' + esc(cur.id_externo) : ''}.`,
     cancelada: 'Cancelada.',
   }[cur.estado];
+  const extension = document.documentElement.dataset.nwsExtension;
   const notaAutoPie = cfg?.herramienta === 'woowup' && !auto
-    ? '<p class="nota">Carga automática en WoowUp: se habilita en Clientes cuando haya credencial de WoowUp. Mientras tanto, usá los datos para pegar.</p>' : '';
+    ? (extension
+        ? '<p class="nota">"Cargar en WoowUp" abre WoowUp y completa la campaña y el editor solo. Después mandás el test desde WoowUp, aprobás acá y programás en WoowUp.</p>'
+        : '<p class="nota">Instalá la extensión "We Are · Cargar en WoowUp" para cargar la campaña con un clic. Mientras tanto, usá los datos para pegar.</p>')
+    : '';
 
   el.innerHTML = `
     <section class="card">
@@ -715,6 +724,7 @@ function pintarLado(){
   if ($('aBorrador')) $('aBorrador').onclick = () => cambiarEstado('borrador');
   if ($('aAprobar')) $('aAprobar').onclick = modalAprobar;
   if ($('aCargada')) $('aCargada').onclick = modalCargada;
+  if ($('aExt')) $('aExt').onclick = e => cargarEnWoowup(e.target);
   if ($('aImpl')) $('aImpl').onclick = e => implementar('armar', e.target);
   if ($('aProg')) $('aProg').onclick = e => implementar('programar', e.target);
   if ($('aCancelar')) $('aCancelar').onclick = () => abrirModal(`<h3>Cancelar news</h3><p class="muted">Queda en el registro y no se puede editar más.</p><div class="ft"><button class="bt" data-cerrar>Volver</button><button class="btn-pri" id="okCancelar">Cancelar news</button></div>`, () => $('okCancelar').onclick = () => { cerrarModal(); cambiarEstado('cancelada'); });
@@ -764,6 +774,44 @@ async function cambiarEstado(estado, extra = {}){
     toast(EST[estado]);
     if (!editable()) { pintarEditor(); recalcular(); }
   }
+}
+
+/** Le pasa la news a la extensión, que abre WoowUp y completa la pantalla. */
+async function cargarEnWoowup(btn){
+  if (!document.documentElement.dataset.nwsExtension) return modalExtension();
+  const cfg = D.configs[cur.marca_id];
+  if (!cfg?.cuenta) return toast('Falta la cuenta de WoowUp de este cliente (Clientes)', true);
+  btn.disabled = true;
+  try {
+    if (!(await guardar())) return;
+    const news = {
+      cuenta: cfg.cuenta, nombre: cur.nombre, asunto: prep.input.asunto, preheader: prep.input.preheader,
+      segmentoId: prep.segmento?.id, segmentoNombre: prep.segmento?.nombre,
+      fecha: fechaCorta(prep.input.envio.fecha), hora: prep.input.envio.hora, html: prep.htmlFinal,
+    };
+    const id = Math.random().toString(36).slice(2);
+    const r = await new Promise(res => {
+      const oir = e => { if (e.source === window && e.data?.nws === 'cargar-respuesta' && e.data.id === id) { removeEventListener('message', oir); res(e.data); } };
+      addEventListener('message', oir);
+      postMessage({nws:'cargar', id, news}, location.origin);
+      setTimeout(() => { removeEventListener('message', oir); res({ok:false, error:'La extensión no respondió. Recargá la página y probá de nuevo.'}); }, 6000);
+    });
+    if (!r.ok) return toast(r.error || 'No se pudo abrir WoowUp', true);
+    toast('Se abrió WoowUp: la extensión está cargando la campaña');
+    try { await api.evento(cur, 'enviada a WoowUp', 'Cargada con la extensión: falta el test y programar'); cargarEventos(); } catch {}
+  } finally { btn.disabled = false; }
+}
+
+function modalExtension(){
+  abrirModal(`<h3>Falta la extensión</h3>
+    <p class="muted">"Cargar en WoowUp" usa la extensión de Chrome "We Are · Cargar en WoowUp". Se instala una vez por compu:</p>
+    <ol style="padding-left:18px;line-height:1.6;margin:8px 0">
+      <li>Pedile a Tomás la carpeta de la extensión y descomprimila.</li>
+      <li>En Chrome abrí <b>chrome://extensions</b> y prendé <b>Modo de desarrollador</b> (arriba a la derecha).</li>
+      <li><b>Cargar descomprimida</b> → elegí la carpeta.</li>
+      <li>Recargá esta página.</li>
+    </ol>
+    <div class="ft"><button class="btn-pri" data-cerrar>Entendido</button></div>`);
 }
 
 async function implementar(accion, btn){
