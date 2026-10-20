@@ -123,9 +123,23 @@
   .pz .meta{font-size:11.5px;color:var(--mut);margin-bottom:6px}
   .pz .inp{margin-bottom:6px;font-size:13px}
   .pz-acc{display:flex;flex-direction:column;gap:4px}
-  .pz-junto{margin-left:28px;padding-left:12px;border-left:3px solid var(--acc)}
   .fila-tag{font-weight:700;color:var(--acc)}
-  .junto-op{display:flex;gap:6px;align-items:center;font-size:12.5px;font-weight:600;margin:0 0 6px;color:var(--mut)}
+  /* Armado: el mail en miniatura */
+  .armado{background:#e9edf2;border-radius:10px;padding:8px;max-width:440px}
+  .fila-arm{display:flex}
+  .tile{position:relative;flex:1 1 0;min-width:0;cursor:pointer;outline:3px solid transparent;outline-offset:-3px;background:#fff}
+  .tile[draggable="true"]{cursor:grab}
+  .tile img{display:block;width:100%;height:auto;pointer-events:none}
+  .tile.sel{outline-color:var(--acc);z-index:1}
+  .tile.moviendo{opacity:.35}
+  .tile.izq::before,.tile.der::after{content:"";position:absolute;top:0;bottom:0;width:6px;background:var(--acc);z-index:2}
+  .tile.izq::before{left:0}.tile.der::after{right:0}
+  .tile-n{position:absolute;top:4px;left:4px;background:rgba(11,25,41,.85);color:#fff;font-size:11px;font-weight:700;border-radius:4px;padding:1px 6px}
+  .tile-sin{position:absolute;bottom:4px;left:4px;background:var(--err);color:#fff;font-size:10.5px;font-weight:700;border-radius:4px;padding:1px 6px}
+  .drop-fila{height:6px;border-radius:3px;margin:2px 0;transition:height .1s}
+  .drop-fila.on{height:14px;background:var(--acc)}
+  .detalle-pz{margin-top:12px;padding:12px;border:1px solid var(--line);border-radius:10px}
+  .detalle-pz .meta{font-size:12px;color:var(--mut)}
   .pz-acc button{width:30px;height:28px;padding:0;border:1px solid var(--line);background:var(--surface);border-radius:6px}
 
   .estado-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
@@ -206,7 +220,7 @@ import { prepararCampana, ErrorPreparacion } from './lib/hub/nucleo.js';
 import { hoyArgentina } from './lib/input/validar.js';
 import { PERFILES } from './lib/tools/perfiles.js';
 
-const VERSION_APP = '2026-10-20.1';
+const VERSION_APP = '2026-10-20.2';
 const SB_URL  = 'https://ojzcxwhoinmljospgmfp.supabase.co';
 const SB_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qemN4d2hvaW5tbGpvc3BnbWZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5MDY5MTYsImV4cCI6MjA5MzQ4MjkxNn0.jmvVP3weuclrBpQJb57BwmHD77Ofy4CDe43cnmiSFCk';
 const BUCKET = 'nws-piezas';
@@ -620,35 +634,117 @@ async function subirPiezas(files){
   } catch (e) { toast('No se pudo subir: ' + e.message, true); }
 }
 
+// ── Armado de piezas: el mail en miniatura, se ordena arrastrando ──
+// Las piezas se guardan en orden con "junto" (va en la fila de la anterior); acá se trabaja por filas.
+let piezaSel = 0, arrastrando = null;
+
+function filasDePiezas(){
+  const filas = [];
+  (cur.piezas || []).forEach((p, k) => { if (k > 0 && p.junto) filas[filas.length - 1].push(p); else filas.push([p]); });
+  return filas;
+}
+function aplicarFilas(filas){
+  cur.piezas = filas.filter(f => f.length).flatMap(f => f.map((p, i) => ({...p, junto: i > 0})));
+}
+function cambioArmado(){ pintarPiezas(); recalcular(); programarGuardado(); }
+
+/** Mueve una pieza: a una fila nueva (antes de la fila que empieza con "ancla") o al costado de otra pieza. */
+function moverPieza(pieza, destino){
+  const filas = filasDePiezas().map(f => f.filter(p => p !== pieza));
+  if (destino.tipo === 'fila') {
+    const i = destino.ancla ? filas.findIndex(f => f.includes(destino.ancla)) : -1;
+    filas.splice(i < 0 ? filas.length : i, 0, [pieza]);
+  } else {
+    const f = filas.find(f => f.includes(destino.pieza));
+    if (!f) return;
+    f.splice(f.indexOf(destino.pieza) + (destino.lado === 'der' ? 1 : 0), 0, pieza);
+  }
+  aplicarFilas(filas);
+  piezaSel = cur.piezas.indexOf(pieza);
+  cambioArmado();
+}
+
 function pintarPiezas(){
   const el = $('listaPiezas'); if (!el) return;
-  const ps = cur.piezas || [], dis = editable() ? '' : 'disabled';
-  // Número de fila de cada pieza (las que van "junto" comparten fila con la anterior).
-  let filaActual = 0;
-  const filaDe = ps.map((p, k) => (k === 0 || !p.junto ? ++filaActual : filaActual));
-  const enFila = n => filaDe.filter(x => x === n).length;
-  el.innerHTML = ps.map((p, k) => {
-    const m = prep?.piezas?.[k]?.medidas;
-    const cols = enFila(filaDe[k]);
-    const junto = k > 0 && p.junto;
-    return `<div class="pz${junto ? ' pz-junto' : ''}"><img src="${esc(p.url)}" alt="">
-      <div><div class="meta"><strong>${k + 1}.</strong> ${esc(p.archivo)} · <span id="pzMed${k}">${m ? m.ancho + '×' + m.alto + 'px' : '…'}</span> · ${Math.round((p.bytes || 0) / 1024)} KB
-        · <span class="fila-tag">Fila ${filaDe[k]}${cols > 1 ? ` · ${cols} columnas` : ''}</span></div>
-        ${k > 0 ? `<label class="junto-op"><input type="checkbox" data-junto="${k}" ${junto ? 'checked' : ''} ${dis}> Al lado de la anterior (misma fila)</label>` : ''}
-        <input class="inp" data-alt="${k}" placeholder="Texto alternativo (opcional: si no, va el asunto)" value="${esc(p.alt)}" ${dis}>
-        <input class="inp" data-link="${k}" placeholder="Link de destino (https://…), vacío = sin link" value="${esc(p.link)}" ${dis}></div>
-      ${editable() ? `<div class="pz-acc"><button data-sub="${k}" title="Subir" ${k ? '' : 'disabled'}>↑</button><button data-baj="${k}" title="Bajar" ${k < ps.length - 1 ? '' : 'disabled'}>↓</button><button data-del="${k}" title="Quitar">✕</button></div>` : '<span></span>'}
-    </div>`;
-  }).join('') || '<p class="nota">Todavía no hay piezas.</p>';
+  const ps = cur.piezas || [];
+  if (!ps.length) { el.innerHTML = '<p class="nota">Todavía no hay piezas.</p>'; return; }
+  if (piezaSel >= ps.length) piezaSel = 0;
+  const filas = filasDePiezas();
+  const puede = editable();
+  const barra = (ancla) => puede ? `<div class="drop-fila" data-ancla="${ancla ? ps.indexOf(ancla) : ''}"></div>` : '';
+  el.innerHTML = `
+    ${puede ? '<p class="nota" style="margin:12px 0 6px">Así queda el mail. Arrastrá una foto para cambiarla de lugar; soltala <b>sobre el costado de otra</b> para ponerlas en la misma fila. Tocá una foto para cargarle el link.</p>' : ''}
+    <div class="armado">
+      ${filas.map(f => `${barra(f[0])}<div class="fila-arm">${f.map(p => {
+        const k = ps.indexOf(p);
+        return `<div class="tile ${k === piezaSel ? 'sel' : ''}" data-k="${k}" ${puede ? 'draggable="true"' : ''} title="Pieza ${k + 1}">
+          <img src="${esc(p.url)}" alt="" draggable="false"><span class="tile-n">${k + 1}</span>${p.link ? '' : '<span class="tile-sin">sin link</span>'}</div>`;
+      }).join('')}</div>`).join('')}
+      ${barra(null)}
+    </div>
+    <div id="pzDetalle"></div>`;
+  pintarDetallePieza();
+
+  el.querySelectorAll('.tile').forEach(t => {
+    const k = +t.dataset.k;
+    t.onclick = () => { piezaSel = k; el.querySelectorAll('.tile').forEach(x => x.classList.toggle('sel', x === t)); pintarDetallePieza(); };
+    if (!puede) return;
+    t.ondragstart = e => { arrastrando = ps[k]; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(k)); t.classList.add('moviendo'); };
+    t.ondragend = () => { arrastrando = null; el.querySelectorAll('.moviendo,.izq,.der,.on').forEach(x => x.classList.remove('moviendo', 'izq', 'der', 'on')); };
+    t.ondragover = e => {
+      if (!arrastrando || arrastrando === ps[k]) return;
+      e.preventDefault();
+      const lado = e.offsetX < t.clientWidth / 2 ? 'izq' : 'der';
+      t.classList.toggle('izq', lado === 'izq'); t.classList.toggle('der', lado === 'der');
+    };
+    t.ondragleave = () => t.classList.remove('izq', 'der');
+    t.ondrop = e => {
+      e.preventDefault();
+      if (!arrastrando || arrastrando === ps[k]) return;
+      moverPieza(arrastrando, {tipo:'costado', pieza: ps[k], lado: e.offsetX < t.clientWidth / 2 ? 'izq' : 'der'});
+    };
+  });
+  el.querySelectorAll('.drop-fila').forEach(b => {
+    b.ondragover = e => { if (!arrastrando) return; e.preventDefault(); b.classList.add('on'); };
+    b.ondragleave = () => b.classList.remove('on');
+    b.ondrop = e => { e.preventDefault(); if (!arrastrando) return; moverPieza(arrastrando, {tipo:'fila', ancla: b.dataset.ancla === '' ? null : ps[+b.dataset.ancla]}); };
+  });
+}
+
+/** Debajo del armado: los datos de la foto elegida. */
+function pintarDetallePieza(){
+  const el = $('pzDetalle'); if (!el) return;
+  const ps = cur.piezas || [], p = ps[piezaSel]; if (!p) { el.innerHTML = ''; return; }
+  const k = piezaSel, dis = editable() ? '' : 'disabled';
+  const fila = filasDePiezas().find(f => f.includes(p));
+  const m = prep?.piezas?.[k]?.medidas;
+  el.innerHTML = `<div class="detalle-pz">
+    <div class="meta"><strong>Pieza ${k + 1}</strong> · ${esc(p.archivo)} · <span id="pzMed${k}">${m ? m.ancho + '×' + m.alto + 'px' : '…'}</span> · ${Math.round((p.bytes || 0) / 1024)} KB${fila.length > 1 ? ` · <span class="fila-tag">fila de ${fila.length}</span>` : ''}</div>
+    <label class="lb" for="pzLink">Link</label>
+    <input class="inp" id="pzLink" placeholder="https://… (vacío = sin link)" value="${esc(p.link || '')}" ${dis}>
+    <label class="lb" for="pzAlt"><span>Texto alternativo</span><span class="cnt">opcional: si no, va el asunto</span></label>
+    <input class="inp" id="pzAlt" value="${esc(p.alt || '')}" ${dis}>
+    ${editable() ? `<div class="acciones">
+      <button class="bt sm" id="pzAntes" ${k ? '' : 'disabled'}>◀ Mover antes</button>
+      <button class="bt sm" id="pzDespues" ${k < ps.length - 1 ? '' : 'disabled'}>Mover después ▶</button>
+      ${fila.length > 1 ? '<button class="bt sm" id="pzSola">Sacar a su propia fila</button>' : ''}
+      <button class="bt sm danger" id="pzQuitar">Quitar</button></div>` : ''}
+  </div>`;
   if (!editable()) return;
-  const set = () => { recalcularPronto(); programarGuardado(); };
-  el.querySelectorAll('[data-alt]').forEach(x => x.oninput = () => { cur.piezas[+x.dataset.alt].alt = x.value; set(); });
-  el.querySelectorAll('[data-link]').forEach(x => x.oninput = () => { cur.piezas[+x.dataset.link].link = x.value.trim(); set(); });
-  el.querySelectorAll('[data-junto]').forEach(x => x.onchange = () => { cur.piezas[+x.dataset.junto].junto = x.checked; pintarPiezas(); recalcular(); programarGuardado(); });
-  const mover = (k, d) => { const a = cur.piezas; [a[k], a[k + d]] = [a[k + d], a[k]]; pintarPiezas(); set(); };
-  el.querySelectorAll('[data-sub]').forEach(x => x.onclick = () => mover(+x.dataset.sub, -1));
-  el.querySelectorAll('[data-baj]').forEach(x => x.onclick = () => mover(+x.dataset.baj, 1));
-  el.querySelectorAll('[data-del]').forEach(x => x.onclick = () => { cur.piezas.splice(+x.dataset.del, 1); pintarPiezas(); set(); });
+  $('pzLink').oninput = () => {
+    p.link = $('pzLink').value.trim();
+    const tile = document.querySelector(`.tile[data-k="${k}"]`);
+    if (tile) { const sin = tile.querySelector('.tile-sin'); if (p.link && sin) sin.remove(); if (!p.link && !sin) tile.insertAdjacentHTML('beforeend', '<span class="tile-sin">sin link</span>'); }
+    recalcularPronto(); programarGuardado();
+  };
+  $('pzAlt').oninput = () => { p.alt = $('pzAlt').value; recalcularPronto(); programarGuardado(); };
+  // Mover antes / después: cambia la foto de lugar y la forma de las filas queda igual.
+  const cambiar = d => { const a = cur.piezas, j = k + d; const ja = a[k].junto, jb = a[j].junto; [a[k], a[j]] = [a[j], a[k]]; a[k].junto = ja; a[j].junto = jb; piezaSel = j; cambioArmado(); };
+  $('pzAntes').onclick = () => cambiar(-1);
+  $('pzDespues').onclick = () => cambiar(1);
+  // Queda sola, justo debajo de la fila en la que estaba.
+  if ($('pzSola')) $('pzSola').onclick = () => { const filas = filasDePiezas(); const i = filas.findIndex(f => f.includes(p)); moverPieza(p, {tipo:'fila', ancla: filas[i + 1]?.[0] || null}); };
+  $('pzQuitar').onclick = () => { cur.piezas.splice(k, 1); if (cur.piezas[0]) cur.piezas[0].junto = false; piezaSel = Math.max(0, k - 1); cambioArmado(); };
 }
 
 /** Placeholders tipo {{LINK_HERO}} del HTML de Atlas → un campo de URL por cada uno. */
