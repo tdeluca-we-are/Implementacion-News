@@ -123,6 +123,9 @@
   .pz .meta{font-size:11.5px;color:var(--mut);margin-bottom:6px}
   .pz .inp{margin-bottom:6px;font-size:13px}
   .pz-acc{display:flex;flex-direction:column;gap:4px}
+  .pz-junto{margin-left:28px;padding-left:12px;border-left:3px solid var(--acc)}
+  .fila-tag{font-weight:700;color:var(--acc)}
+  .junto-op{display:flex;gap:6px;align-items:center;font-size:12.5px;font-weight:600;margin:0 0 6px;color:var(--mut)}
   .pz-acc button{width:30px;height:28px;padding:0;border:1px solid var(--line);background:var(--surface);border-radius:6px}
 
   .estado-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
@@ -203,7 +206,7 @@ import { prepararCampana, ErrorPreparacion } from './lib/hub/nucleo.js';
 import { hoyArgentina } from './lib/input/validar.js';
 import { PERFILES } from './lib/tools/perfiles.js';
 
-const VERSION_APP = '2026-10-19.4';
+const VERSION_APP = '2026-10-20.1';
 const SB_URL  = 'https://ojzcxwhoinmljospgmfp.supabase.co';
 const SB_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qemN4d2hvaW5tbGpvc3BnbWZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5MDY5MTYsImV4cCI6MjA5MzQ4MjkxNn0.jmvVP3weuclrBpQJb57BwmHD77Ofy4CDe43cnmiSFCk';
 const BUCKET = 'nws-piezas';
@@ -488,7 +491,7 @@ function inputDe(n){
   if (n.fecha_envio || n.hora_envio) base.envio = {fecha:n.fecha_envio || '', hora:n.hora_envio || ''};
   if (n.contenido === 'html') base.html = 'pieza.html';
   // Sin alt propio, cada foto usa el asunto (lo que se lee si el mail bloquea imágenes).
-  else base.piezas = (n.piezas || []).map(p => ({imagen:p.archivo, alt:p.alt || i.asunto || n.nombre || '', link:p.link || undefined}));
+  else base.piezas = (n.piezas || []).map((p, k) => ({imagen:p.archivo, alt:p.alt || i.asunto || n.nombre || '', link:p.link || undefined, junto: k > 0 && !!p.junto}));
   return base;
 }
 
@@ -546,7 +549,7 @@ function pintarEditor(){
         <section class="card"><h2>Contenido</h2>
           <div class="tabs"><button class="tab ${n.contenido === 'piezas' ? 'on' : ''}" data-cont="piezas" ${dis}>Imágenes (JPG/PNG)</button><button class="tab ${n.contenido === 'html' ? 'on' : ''}" data-cont="html" ${dis}>HTML de Atlas</button></div>
           <div id="contPiezas" ${n.contenido === 'piezas' ? '' : 'hidden'}>
-            ${editable() ? '<label class="drop" id="drop" for="fFiles">Arrastrá las piezas acá o hacé clic para elegirlas. Se ordenan por nombre; después podés moverlas.<input type="file" id="fFiles" accept="image/png,image/jpeg,image/gif" multiple hidden></label><div style="margin-top:8px"><button class="bt sm" id="fDrive" type="button">Importar desde Drive</button> <span class="muted" style="font-size:12px">pegás el link de la carpeta o de la imagen</span></div>' : ''}
+            ${editable() ? '<label class="drop" id="drop" for="fFiles">Arrastrá las piezas acá o hacé clic para elegirlas. Se ordenan por nombre; después podés moverlas y poner dos o más en la misma fila.<input type="file" id="fFiles" accept="image/png,image/jpeg,image/gif" multiple hidden></label><div style="margin-top:8px"><button class="bt sm" id="fDrive" type="button">Importar desde Drive</button> <span class="muted" style="font-size:12px">pegás el link de la carpeta o de la imagen</span></div>' : ''}
             <div id="listaPiezas"></div>
             <label class="lb" for="fPie">Texto al pie (recomendado: un mail de solo imágenes entrega peor)</label>
             <textarea class="inp" id="fPie" ${dis}>${esc(i.textoPie || '')}</textarea>
@@ -620,10 +623,18 @@ async function subirPiezas(files){
 function pintarPiezas(){
   const el = $('listaPiezas'); if (!el) return;
   const ps = cur.piezas || [], dis = editable() ? '' : 'disabled';
+  // Número de fila de cada pieza (las que van "junto" comparten fila con la anterior).
+  let filaActual = 0;
+  const filaDe = ps.map((p, k) => (k === 0 || !p.junto ? ++filaActual : filaActual));
+  const enFila = n => filaDe.filter(x => x === n).length;
   el.innerHTML = ps.map((p, k) => {
     const m = prep?.piezas?.[k]?.medidas;
-    return `<div class="pz"><img src="${esc(p.url)}" alt="">
-      <div><div class="meta"><strong>${k + 1}.</strong> ${esc(p.archivo)} · <span id="pzMed${k}">${m ? m.ancho + '×' + m.alto + 'px' : '…'}</span> · ${Math.round((p.bytes || 0) / 1024)} KB</div>
+    const cols = enFila(filaDe[k]);
+    const junto = k > 0 && p.junto;
+    return `<div class="pz${junto ? ' pz-junto' : ''}"><img src="${esc(p.url)}" alt="">
+      <div><div class="meta"><strong>${k + 1}.</strong> ${esc(p.archivo)} · <span id="pzMed${k}">${m ? m.ancho + '×' + m.alto + 'px' : '…'}</span> · ${Math.round((p.bytes || 0) / 1024)} KB
+        · <span class="fila-tag">Fila ${filaDe[k]}${cols > 1 ? ` · ${cols} columnas` : ''}</span></div>
+        ${k > 0 ? `<label class="junto-op"><input type="checkbox" data-junto="${k}" ${junto ? 'checked' : ''} ${dis}> Al lado de la anterior (misma fila)</label>` : ''}
         <input class="inp" data-alt="${k}" placeholder="Texto alternativo (opcional: si no, va el asunto)" value="${esc(p.alt)}" ${dis}>
         <input class="inp" data-link="${k}" placeholder="Link de destino (https://…), vacío = sin link" value="${esc(p.link)}" ${dis}></div>
       ${editable() ? `<div class="pz-acc"><button data-sub="${k}" title="Subir" ${k ? '' : 'disabled'}>↑</button><button data-baj="${k}" title="Bajar" ${k < ps.length - 1 ? '' : 'disabled'}>↓</button><button data-del="${k}" title="Quitar">✕</button></div>` : '<span></span>'}
@@ -633,6 +644,7 @@ function pintarPiezas(){
   const set = () => { recalcularPronto(); programarGuardado(); };
   el.querySelectorAll('[data-alt]').forEach(x => x.oninput = () => { cur.piezas[+x.dataset.alt].alt = x.value; set(); });
   el.querySelectorAll('[data-link]').forEach(x => x.oninput = () => { cur.piezas[+x.dataset.link].link = x.value.trim(); set(); });
+  el.querySelectorAll('[data-junto]').forEach(x => x.onchange = () => { cur.piezas[+x.dataset.junto].junto = x.checked; pintarPiezas(); recalcular(); programarGuardado(); });
   const mover = (k, d) => { const a = cur.piezas; [a[k], a[k + d]] = [a[k + d], a[k]]; pintarPiezas(); set(); };
   el.querySelectorAll('[data-sub]').forEach(x => x.onclick = () => mover(+x.dataset.sub, -1));
   el.querySelectorAll('[data-baj]').forEach(x => x.onclick = () => mover(+x.dataset.baj, 1));
