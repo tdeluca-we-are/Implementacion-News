@@ -220,7 +220,7 @@ import { prepararCampana, ErrorPreparacion } from './lib/hub/nucleo.js';
 import { hoyArgentina } from './lib/input/validar.js';
 import { PERFILES } from './lib/tools/perfiles.js';
 
-const VERSION_APP = '2026-10-20.3';
+const VERSION_APP = '2026-10-20.4';
 const SB_URL  = 'https://ojzcxwhoinmljospgmfp.supabase.co';
 const SB_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qemN4d2hvaW5tbGpvc3BnbWZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5MDY5MTYsImV4cCI6MjA5MzQ4MjkxNn0.jmvVP3weuclrBpQJb57BwmHD77Ofy4CDe43cnmiSFCk';
 const BUCKET = 'nws-piezas';
@@ -523,7 +523,7 @@ function recalcular(){
     // En la demo las imágenes son blob: del navegador; se valida como si estuvieran en un hosting público.
     const urlValidada = p => api.demo ? `https://demo.we-are.local/${p.archivo}` : p.url;
     const contenido = cur.contenido === 'html' ? {html: cur.html || ''} : {piezas: (cur.piezas || []).map(p => ({archivo:p.archivo, url:urlValidada(p), datos: CACHE_BYTES.get(p.url) || new Uint8Array()}))};
-    if (cur.contenido === 'html' && !cur.html) errPrep = [{severidad:'error', codigo:'html', mensaje:'Cargá el HTML de Atlas.'}];
+    if (cur.contenido === 'html' && !cur.html) errPrep = [{severidad:'error', codigo:'html', mensaje:'Cargá el código HTML del mail.'}];
     else if (cur.contenido === 'piezas' && !(cur.piezas || []).length) errPrep = [{severidad:'error', codigo:'piezas', mensaje:'Subí las piezas (JPG o PNG) en orden.'}];
     else {
       try { prep = prepararCampana(input, {[String(cur.marca_id)]: cliente}, contenido, hoyArgentina()); }
@@ -561,7 +561,7 @@ function pintarEditor(){
         </section>
 
         <section class="card"><h2>Contenido</h2>
-          <div class="tabs"><button class="tab ${n.contenido === 'piezas' ? 'on' : ''}" data-cont="piezas" ${dis}>Imágenes (JPG/PNG)</button><button class="tab ${n.contenido === 'html' ? 'on' : ''}" data-cont="html" ${dis}>HTML de Atlas</button></div>
+          <div class="tabs"><button class="tab ${n.contenido === 'piezas' ? 'on' : ''}" data-cont="piezas" ${dis}>Imágenes (JPG/PNG)</button><button class="tab ${n.contenido === 'html' ? 'on' : ''}" data-cont="html" ${dis}>Código HTML</button></div>
           <div id="contPiezas" ${n.contenido === 'piezas' ? '' : 'hidden'}>
             ${editable() ? '<label class="drop" id="drop" for="fFiles">Arrastrá las piezas acá o hacé clic para elegirlas. Se ordenan por nombre; después podés moverlas y poner dos o más en la misma fila.<input type="file" id="fFiles" accept="image/png,image/jpeg,image/gif" multiple hidden></label><div style="margin-top:8px"><button class="bt sm" id="fDrive" type="button">Importar desde Drive</button> <span class="muted" style="font-size:12px">pegás el link de la carpeta o de la imagen</span></div>' : ''}
             <div id="listaPiezas"></div>
@@ -747,7 +747,7 @@ function pintarDetallePieza(){
   $('pzQuitar').onclick = () => { cur.piezas.splice(k, 1); if (cur.piezas[0]) cur.piezas[0].junto = false; piezaSel = Math.max(0, k - 1); cambioArmado(); };
 }
 
-/** Placeholders tipo {{LINK_HERO}} del HTML de Atlas → un campo de URL por cada uno. */
+/** Placeholders tipo {{LINK_HERO}} del HTML → un campo de URL por cada uno. */
 function pintarPlaceholders(){
   const el = $('linksPh'); if (!el) return;
   const encontrados = [...new Set([...(cur.html || '').matchAll(/href\s*=\s*["'](\{\{\s*[A-Z0-9_]+\s*\}\})["']/gi)].map(m => m[1]))];
