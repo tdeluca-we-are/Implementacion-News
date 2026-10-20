@@ -226,7 +226,7 @@ import { prepararCampana, ErrorPreparacion } from './lib/hub/nucleo.js';
 import { hoyArgentina } from './lib/input/validar.js';
 import { PERFILES } from './lib/tools/perfiles.js';
 
-const VERSION_APP = '2026-10-20.5';
+const VERSION_APP = '2026-10-20.6';
 const SB_URL  = 'https://ojzcxwhoinmljospgmfp.supabase.co';
 const SB_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qemN4d2hvaW5tbGpvc3BnbWZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5MDY5MTYsImV4cCI6MjA5MzQ4MjkxNn0.jmvVP3weuclrBpQJb57BwmHD77Ofy4CDe43cnmiSFCk';
 const BUCKET = 'nws-piezas';
@@ -439,7 +439,7 @@ function ruta(){
   const [vista, id, extra] = (location.hash.replace('#', '') || 'news').split('/');
   document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('on', a.dataset.nav === (vista === 'demo' ? 'news' : vista)));
   if (vista === 'news' && id) return abrirNews(+id);
-  if (vista === 'desde' && id) { vistaLista(); const ed = marcasVisibles().filter(m => puedeEditar(m.id)); if (ed.length) modalNueva(ed, {marca: +id, envio: +extra}); return; }
+  if (vista === 'desde' && id) return newsDesdeCalendario(+id, +extra);
   if (vista === 'clientes' && me.rol === 'admin') return vistaClientes(id ? +id : null);
   if (vista === 'accesos' && me.rol === 'admin') return vistaAccesos();
   vistaLista();
@@ -474,6 +474,30 @@ function vistaLista(){
   $('fQ').oninput = e => { F.q = e.target.value; guardarF(); };
   document.querySelectorAll('[data-est]').forEach(b => b.onclick = () => { F.estado = b.dataset.est; document.querySelectorAll('[data-est]').forEach(x => x.classList.toggle('on', x === b)); guardarF(); });
   if ($('nuevaBtn')) $('nuevaBtn').onclick = () => modalNueva(editables);
+}
+
+/** Botón "Maquetar en el hub" del calendario: crea la news con los datos del envío y abre el editor. */
+async function newsDesdeCalendario(marcaId, envioId){
+  $('vista').innerHTML = '<div class="vacio">Preparando la news del calendario…</div>';
+  if (!puedeEditar(marcaId)) { toast('No tenés permiso para editar news de esta marca en el hub', true); location.hash = '#news'; return; }
+  let envios;
+  try { envios = await api.enviosCalendario(marcaId); }
+  catch (e) { toast('No se pudo leer el calendario: ' + e.message, true); location.hash = '#news'; return; }
+  const e = envios.find(x => x.id === envioId);
+  if (!e) { toast('Ese envío ya no está disponible en el calendario (¿se envió o se canceló?)', true); location.hash = '#news'; return; }
+  if (e.news_id) { location.replace('#news/' + e.news_id); return; }
+  // El calendario guarda asunto y preheader juntos (una línea cada uno).
+  const [asunto = '', ...resto] = (e.asunto || '').split('\n');
+  try {
+    const n = await api.crearNews({marca_id: marcaId, nombre: e.titulo, cal_envio_id: e.id, fecha_envio: e.fecha, hora_envio: e.hora || null,
+      creado_por: me.nombre || me.email, input: {asunto: asunto.trim(), preheader: resto.join(' ').trim(), segmento: e.segmento || ''}});
+    D.news.unshift(n);
+    location.replace('#news/' + n.id);
+  } catch (err) {
+    // Si alguien la creó recién (doble clic, otra pestaña), se abre esa.
+    const otra = (await api.enviosCalendario(marcaId).catch(() => [])).find(x => x.id === envioId)?.news_id;
+    if (otra) location.replace('#news/' + otra); else { toast(err.message, true); location.hash = '#news'; }
+  }
 }
 
 function modalNueva(editables, pre = {}){
