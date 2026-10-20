@@ -220,7 +220,7 @@ import { prepararCampana, ErrorPreparacion } from './lib/hub/nucleo.js';
 import { hoyArgentina } from './lib/input/validar.js';
 import { PERFILES } from './lib/tools/perfiles.js';
 
-const VERSION_APP = '2026-10-20.2';
+const VERSION_APP = '2026-10-20.3';
 const SB_URL  = 'https://ojzcxwhoinmljospgmfp.supabase.co';
 const SB_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qemN4d2hvaW5tbGpvc3BnbWZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5MDY5MTYsImV4cCI6MjA5MzQ4MjkxNn0.jmvVP3weuclrBpQJb57BwmHD77Ofy4CDe43cnmiSFCk';
 const BUCKET = 'nws-piezas';
@@ -961,7 +961,7 @@ async function cargarEnWoowup(btn){
   try {
     if (!(await guardar())) return;
     const news = {
-      cuenta: cfg.cuenta, nombre: cur.nombre, asunto: prep.input.asunto, preheader: prep.input.preheader,
+      cuenta: cuentaDe(cfg.cuenta), nombre: cur.nombre, asunto: prep.input.asunto, preheader: prep.input.preheader,
       segmentoId: /^\d+$/.test(prep.segmento?.id || '') ? prep.segmento.id : '', segmentoNombre: prep.segmento?.nombre || '',
       fecha: prep.input.envio?.fecha ? fechaCorta(prep.input.envio.fecha) : 'la que corresponda', hora: prep.input.envio?.hora || '', html: prep.htmlFinal,
     };
@@ -1051,7 +1051,8 @@ function vistaClientes(marcaSel){
 function cuentaDe(valor){
   const v = (valor || '').trim();
   const m = v.match(/woowup\.com\/([^/?#\s]+)/i);
-  return (m ? m[1] : v).replace(/^\/+|\/+$/g, '');
+  // Las direcciones de WoowUp van en minúsculas: /Randers/ no existe, /randers/ sí.
+  return (m ? m[1] : v).replace(/^\/+|\/+$/g, '').toLowerCase();
 }
 
 function formCliente(marcaId){
