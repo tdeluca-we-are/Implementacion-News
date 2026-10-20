@@ -124,6 +124,12 @@
   .pz .inp{margin-bottom:6px;font-size:13px}
   .pz-acc{display:flex;flex-direction:column;gap:4px}
   .fila-tag{font-weight:700;color:var(--acc)}
+  .envios-cal{display:flex;flex-direction:column;gap:6px;max-height:260px;overflow:auto}
+  .env-cal{display:grid;grid-template-columns:auto 92px minmax(0,1fr);gap:10px;align-items:start;padding:9px 10px;border:1px solid var(--line);border-radius:8px;cursor:pointer;font-size:13px}
+  .env-cal.on{border-color:var(--acc);background:var(--soft)}
+  .env-cal:not(:has(.env-f)){grid-template-columns:auto minmax(0,1fr)}
+  .env-f{font-weight:700;font-variant-numeric:tabular-nums}
+  .env-t{font-weight:600;min-width:0}.env-t small{display:block;font-weight:400;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   /* Armado: el mail en miniatura */
   .armado{background:#e9edf2;border-radius:10px;padding:8px;max-width:440px}
   .fila-arm{display:flex}
@@ -220,7 +226,7 @@ import { prepararCampana, ErrorPreparacion } from './lib/hub/nucleo.js';
 import { hoyArgentina } from './lib/input/validar.js';
 import { PERFILES } from './lib/tools/perfiles.js';
 
-const VERSION_APP = '2026-10-20.4';
+const VERSION_APP = '2026-10-20.5';
 const SB_URL  = 'https://ojzcxwhoinmljospgmfp.supabase.co';
 const SB_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9qemN4d2hvaW5tbGpvc3BnbWZwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc5MDY5MTYsImV4cCI6MjA5MzQ4MjkxNn0.jmvVP3weuclrBpQJb57BwmHD77Ofy4CDe43cnmiSFCk';
 const BUCKET = 'nws-piezas';
@@ -260,6 +266,7 @@ function apiSupabase(){
     configs: () => todo('nws_cliente_config'),
     news: () => todo('nws_news', 'id,marca_id,nombre,fecha_envio,hora_envio,estado,n_errores,n_avisos,actualizado_por,actualizado_at', {col:'actualizado_at', asc:false}),
     async newsUna(id){ return (await q(sb.from('nws_news').select('*').eq('id', id)))[0] || null; },
+    async enviosCalendario(m){ const r = await sb.rpc('nws_envios_calendario', {m}); if (r.error) throw r.error; return r.data || []; },
     async crearNews(fila){ return (await q(sb.from('nws_news').insert(fila).select()))[0]; },
     async guardarNews(id, cambios){ return (await q(sb.from('nws_news').update(cambios).eq('id', id).select()))[0]; },
     eventos: id => q(sb.from('nws_eventos').select('*').eq('news_id', id).order('en', {ascending:false}).limit(50)),
@@ -302,6 +309,14 @@ function apiDemo(){
     async marcas(){ return db.marcas; }, async usuarioMarcas(){ return db.um; }, async usuarios(){ return db.usuarios; },
     async configs(){ return db.configs; }, async news(){ return db.news.map(n => ({...n})); },
     async newsUna(id){ const n = db.news.find(x => x.id === id); return n ? structuredClone(n) : null; },
+    async enviosCalendario(m){
+      if (m !== 1) return [];
+      const usada = id => db.news.find(n => n.cal_envio_id === id)?.id || null;
+      return [
+        {id:501, fecha:'2026-11-05', hora:'10:00', titulo:'Black Friday - Preventa', asunto:'Llegó la preventa del Black Friday\nHasta 40% off solo para suscriptores', segmento:'Compradores 2026', estado:'planificado', news_id:usada(501)},
+        {id:502, fecha:'2026-11-12', hora:'09:30', titulo:'Newsletter quincenal', asunto:'', segmento:'Todos los usuarios', estado:'idea', news_id:usada(502)},
+      ];
+    },
     async crearNews(f){ const n = {id:db.id++, estado:'borrador', input:{}, piezas:[], contenido:'piezas', n_errores:0, n_avisos:0, creado_at:ahora(), actualizado_at:ahora(), actualizado_por:'Usuario demo', ...f}; db.news.unshift(n); evento(n, 'creada'); return structuredClone(n); },
     async guardarNews(id, c){
       // Mismas reglas que el trigger de la base.
@@ -421,9 +436,10 @@ function piezaDemo(w, h, i){
 window.addEventListener('hashchange', ruta);
 function ruta(){
   if (!me) return;
-  const [vista, id] = (location.hash.replace('#', '') || 'news').split('/');
+  const [vista, id, extra] = (location.hash.replace('#', '') || 'news').split('/');
   document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('on', a.dataset.nav === (vista === 'demo' ? 'news' : vista)));
   if (vista === 'news' && id) return abrirNews(+id);
+  if (vista === 'desde' && id) { vistaLista(); const ed = marcasVisibles().filter(m => puedeEditar(m.id)); if (ed.length) modalNueva(ed, {marca: +id, envio: +extra}); return; }
   if (vista === 'clientes' && me.rol === 'admin') return vistaClientes(id ? +id : null);
   if (vista === 'accesos' && me.rol === 'admin') return vistaAccesos();
   vistaLista();
@@ -460,19 +476,51 @@ function vistaLista(){
   if ($('nuevaBtn')) $('nuevaBtn').onclick = () => modalNueva(editables);
 }
 
-function modalNueva(editables){
-  abrirModal(`<h3>Nueva news</h3><p class="muted">Elegí el cliente. Después cargás asunto, piezas y el resto.</p>
-    <label class="lb" for="nMarca">Cliente</label><select class="inp" id="nMarca">${editables.map(m => `<option value="${m.id}">${esc(m.nombre)}${D.configs[m.id] ? '' : ' (sin configurar)'}</option>`).join('')}</select>
+function modalNueva(editables, pre = {}){
+  abrirModal(`<h3>Nueva news</h3>
+    <label class="lb" for="nMarca">Cliente</label><select class="inp" id="nMarca">${editables.map(m => `<option value="${m.id}" ${pre.marca === m.id ? 'selected' : ''}>${esc(m.nombre)}${D.configs[m.id] ? '' : ' (sin configurar)'}</option>`).join('')}</select>
+    <label class="lb">Del calendario</label>
+    <div id="nEnvios" class="envios-cal"><p class="nota">Buscando envíos de email…</p></div>
     <label class="lb" for="nNombre">Nombre interno</label><input class="inp" id="nNombre" placeholder="Ej: Hot Sale - Día 1">
     <div class="ft"><button class="bt" data-cerrar>Cancelar</button><button class="btn-pri" id="nCrear">Crear</button></div>`);
+  $('modal').style.width = '560px';
+  let envios = [], elegido = null;
+  const pintarEnvios = () => {
+    const libres = envios.filter(e => !e.news_id);
+    $('nEnvios').innerHTML = (libres.length ? libres.map(e => `<label class="env-cal ${elegido?.id === e.id ? 'on' : ''}" data-env="${e.id}">
+        <input type="radio" name="nEnv" ${elegido?.id === e.id ? 'checked' : ''}>
+        <span class="env-f">${fechaCorta(e.fecha)}${e.hora ? ' · ' + esc(e.hora) : ''}</span>
+        <span class="env-t">${esc(e.titulo)}${e.asunto ? `<small>${esc(e.asunto.split('\n')[0])}</small>` : ''}</span></label>`).join('')
+        : '<p class="nota">No hay envíos de email planificados para esta marca en el calendario.</p>')
+      + (libres.length ? `<label class="env-cal ${elegido ? '' : 'on'}" data-env=""><input type="radio" name="nEnv" ${elegido ? '' : 'checked'}><span class="env-t">En blanco, sin envío del calendario</span></label>` : '')
+      + (envios.length > libres.length ? `<p class="nota">${envios.length - libres.length} envío(s) ya tienen su news en el hub.</p>` : '');
+    $('nEnvios').querySelectorAll('[data-env]').forEach(l => l.onclick = () => {
+      elegido = envios.find(e => String(e.id) === l.dataset.env) || null;
+      if (elegido) $('nNombre').value = elegido.titulo;
+      pintarEnvios();
+    });
+  };
+  const cargarEnvios = async () => {
+    elegido = null; $('nEnvios').innerHTML = '<p class="nota">Buscando envíos de email…</p>';
+    try { envios = await api.enviosCalendario(+$('nMarca').value); }
+    catch (e) { envios = []; $('nEnvios').innerHTML = `<p class="nota">No se pudo leer el calendario${/nws_envios_calendario|function/i.test(e.message || '') ? ' (falta correr hub-v3.sql)' : ''}.</p>`; return; }
+    if (pre.envio) { elegido = envios.find(e => e.id === pre.envio && !e.news_id) || null; if (elegido) $('nNombre').value = elegido.titulo; pre.envio = null; }
+    pintarEnvios();
+  };
+  $('nMarca').onchange = cargarEnvios;
+  cargarEnvios();
   $('nNombre').focus();
   $('nCrear').onclick = async () => {
     const marca_id = +$('nMarca').value, nombre = $('nNombre').value.trim();
     if (!nombre) return toast('Poné un nombre', true);
+    // Del envío: el calendario guarda asunto y preheader juntos (una línea cada uno).
+    const [asunto = '', ...resto] = (elegido?.asunto || '').split('\n');
+    const fila = {marca_id, nombre, creado_por: me.nombre || me.email, input: elegido ? {asunto: asunto.trim(), preheader: resto.join(' ').trim(), segmento: elegido.segmento || ''} : {}};
+    if (elegido) Object.assign(fila, {cal_envio_id: elegido.id, fecha_envio: elegido.fecha, hora_envio: elegido.hora || null});
     try {
-      const n = await api.crearNews({marca_id, nombre, creado_por: me.nombre || me.email, input:{}});
+      const n = await api.crearNews(fila);
       cerrarModal(); D.news.unshift(n); location.hash = '#news/' + n.id;
-    } catch (e) { toast(e.message, true); }
+    } catch (e) { toast(/nws_news_cal_envio_idx|duplicate/i.test(e.message || '') ? 'Ese envío del calendario ya tiene su news en el hub.' : e.message, true); }
   };
 }
 
@@ -544,7 +592,7 @@ function pintarEditor(){
   const dis = editable() ? '' : 'disabled';
   const segsUsados = segmentosDeMarca(n.marca_id);
   $('vista').innerHTML = `
-    <div class="head"><a href="#news" class="bt sm" style="text-decoration:none;color:inherit">← News</a><h1>${esc(n.nombre || 'Sin nombre')}</h1><span class="muted">${esc(nombreMarca(n.marca_id))}${cfg ? ' · ' + HERR[cfg.herramienta] + ' · ' + esc(cfg.cuenta) : ''}</span></div>
+    <div class="head"><a href="#news" class="bt sm" style="text-decoration:none;color:inherit">← News</a><h1>${esc(n.nombre || 'Sin nombre')}</h1><span class="muted">${esc(nombreMarca(n.marca_id))}${cfg ? ' · ' + HERR[cfg.herramienta] + ' · ' + esc(cfg.cuenta) : ''}</span>${n.cal_envio_id ? '<span class="est lista" title="Esta news viene de un envío del calendario de Owned Media">Del calendario</span>' : ''}</div>
     <div class="editor">
       <div class="col">
         <section class="card"><h2>Datos de la campaña</h2>
